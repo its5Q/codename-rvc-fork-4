@@ -24,7 +24,7 @@
 - 'simple' method chosen for preprocessing ( 3sec segments. )
 - Ideally, you want to use 'post' as norm option in the ui.
 Expect issues with PESQ and data alignment If the following requirements are not met.
-<br/>``THESE REQUIREMENTS ARE ESPECIALLY IMPORTANT FOR RingFormer.``
+<br/>``THESE REQUIREMENTS ARE ESPECIALLY IMPORTANT FOR RINGFORMER ARCHITECTURE.``
 ㅤ
 <br/>
 
