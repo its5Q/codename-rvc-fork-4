@@ -33,4 +33,5 @@ rvc/lib/utils - debug.py
 rvc/train/preprocess/preprocess - backup.py
 rvc/train/preprocess/preprocess_old - backup.py
 debug/
+DEV/
 *.pyc
