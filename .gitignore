@@ -1,0 +1,36 @@
+# Files to keep ==========================
+!assets/audios/.gitkeep
+!assets/datasets/.gitkeep
+!assets/audios/audio-others/.gitkeep
+!logs/.gitkeep
+!logs/mute/
+!logs/mute_spin/
+!logs/reference/
+!logs/reference/**
+!logs/run_tensorboard_in_model_folder.bat
+!rvc/models/pretraineds/.gitkeep
+!rvc/models/pretraineds/hifi-gan/.gitkeep
+!rvc/models/pretraineds/custom/.gitkeep
+# Files to be ignored  ==========================
+env/
+rollback_cache/
+ffprobe.exe
+ffmpeg.exe
+assets/audios/
+assets/datasets/
+assets/audios/audio-others/
+logs/
+rvc/models/pretraineds/
+rvc/models/predictors/fcpe.pt
+rvc/models/predictors/rmvpe.pt
+rvc/models/embedders/spin/pytorch_model.bin
+rvc/models/embedders/contentvec/pytorch_model.bin
+rvc/models/embedders/spin/config.json
+rvc/models/embedders/contentvec/config.json
+
+rvc/infer/pipeline - debug_ver.py
+rvc/lib/utils - debug.py
+rvc/train/preprocess/preprocess - backup.py
+rvc/train/preprocess/preprocess_old - backup.py
+
+*.pyc
