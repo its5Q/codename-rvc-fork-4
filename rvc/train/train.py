@@ -462,6 +462,9 @@ def run(
         print("    ██████  Double-update for Discriminator: Yes          ██████")
         print(f"    ██████  Amount of D updates per step: {d_updates_per_step}              ██████")
 
+    # Validation check:
+    print(f"    ██████  Using Validation: {use_validation}                         ██████")
+
     if rank == 0:
         writer_eval = SummaryWriter(
             log_dir=os.path.join(experiment_dir, "eval"),
@@ -923,7 +926,8 @@ def run(
             config,
             [net_g, net_d_mpd, net_d_cqt if vocoder == "RingFormer" else None],
             [optim_g, optim_d],
-            [train_loader, None],
+            train_loader,
+            val_loader if use_validation else None,
             [writer_eval],
             cache,
             custom_save_every_weights,
@@ -963,7 +967,8 @@ def training_loop(
     hps,
     nets,
     optims,
-    loaders,
+    train_loader,
+    val_loader,
     writers,
     cache,
     custom_save_every_weights,
@@ -998,9 +1003,9 @@ def training_loop(
 
     optim_g, optim_d = optims
 
-    train_loader = loaders[0] if loaders is not None else None
+    train_loader = train_loader if train_loader is not None else None
     if not benchmark_mode and use_validation:
-        val_loader = loaders[1] if loaders is not None and len(loaders) > 1 else None
+        val_loader = val_loader if val_loader is not None else None
 
     if writers is not None:
         writer = writers[0]
