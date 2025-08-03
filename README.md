@@ -10,7 +10,7 @@
 
 
 
-## A lil bit more the project:
+## A lil bit more about the project:
 
 ### This fork is pretty much my personal take on Applio. ✨
 `Goal of this project is for me to have a much more flexible base than mainline rvc.`
