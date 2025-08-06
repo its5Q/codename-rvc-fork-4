@@ -55,7 +55,7 @@ with gr.Blocks(
         "ㅤㅤBased on Applioㅤㅤ"
     )
     gr.Markdown(
-        "ㅤㅤㅤ[Support / Discord](https://discord.gg/SkwcMjxwMq) ㅤ/ ㅤ[GitHub](https://github.com/codename0og/codename-rvc-fork-4)"
+        "ㅤㅤㅤ[Support - Community Discord](https://discord.gg/SkwcMjxwMq) ㅤ/ ㅤ[GitHub](https://github.com/codename0og/codename-rvc-fork-4)"
     )
     with gr.Tab("Inference"):
         inference_tab()
