@@ -987,7 +987,7 @@ def train_tab():
                     vocoder_arch_value = "ringformer"
                     return (
                         {
-                            "choices": ["24000", "48000"],
+                            "choices": ["24000", "32000", "40000", "48000"],
                             "__type__": "update",
                             "value": "48000",
                         }, 
