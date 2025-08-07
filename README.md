@@ -93,14 +93,21 @@ Start Applio using:
 This launches the Gradio interface in your default browser.
 
 ### 3. Optional: TensorBoard Monitoring
-
+ 
 To monitor training or visualize data:
 - Run the " run_tensorboard_in_model_folder.bat " file from logs folder and paste in there path to your model's folder </br>( containing 'eval' folder or tfevents file/s. )</br>If it doesn't work for you due to blocked port, open up CMD with admin rights and use this command:</br>`` netsh advfirewall firewall add rule name="Open Port 25565" dir=in action=allow protocol=TCP localport=25565 ``
+ 
+## Referenced projects
++ [RingFormer](https://github.com/seongho608/RingFormer)
++ [RiFornet](https://github.com/Respaired/RiFornet_Vocoder)
++ [bfloat_optimizer (AdamW BF16)](https://github.com/lessw2020/bfloat_optimizer)
++ [BigVGAN](https://github.com/NVIDIA/BigVGAN/tree/main)
++ [Pytorch-Snake](https://github.com/falkaer/pytorch-snake)
 
-
+ 
 ## Disclaimer
 ``The creators of the original Applio repository, Applio's contributors, and the maintainer of this fork (Codename;0), built upon Applio, are not responsible for any legal issues, damages, or consequences arising from the use of this repository or the content generated from it. By using this fork, you acknowledge that:``
-
+ 
 - The use of this fork is at your own risk.
 - This repository is intended solely for educational, and experimental purposes.
 - Any misuse, including but not limited to illegal activities or violation of third-party rights, <br/> is not the responsibility of the original creators, contributors, or this fork’s maintainer.
