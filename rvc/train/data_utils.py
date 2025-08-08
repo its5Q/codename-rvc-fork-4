@@ -175,6 +175,18 @@ class TextAudioLoaderMultiNSFsid(torch.utils.data.Dataset):
         """
         return self.get_audio_text_pair(self.audiopaths_and_text[index])
 
+
+    def get_file_paths(self, indices):
+        """
+        Returns a list of file paths for the given batch indices.
+
+        Args:
+            indices (list or tensor): Indices of the samples in the batch.
+        """
+        file_paths = [self.audiopaths_and_text[idx][0] for idx in indices]
+        return file_paths
+
+
     def __len__(self):
         """
         Returns the length of the dataset.

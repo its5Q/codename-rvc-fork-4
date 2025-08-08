@@ -847,10 +847,19 @@ def run(
         reference = (phone, phone_lengths, pitch, pitchf, sid)
 
     else:
-        print("No custom reference found, perhaps a mistake in filename?")
-        print("[FALLBACK] Using the first batch from train_loader.")
+        print("[WARNING] No custom reference found.")
         info = next(iter(train_loader))
         phone, phone_lengths, pitch, pitchf, _, _, _, _, sid = info
+
+        batch_indices = []
+        for batch in train_sampler:
+            batch_indices = batch  # This is the list of indices in the current batch
+            break  # We only need the first batch indices
+
+        file_paths = train_loader.dataset.get_file_paths(batch_indices)
+        file_names = [os.path.basename(path) for path in file_paths]
+        print("[FALLBACK] Fetching reference from the first batch of the train_loader")
+        print(f"[FALLBACK] Origin of the ref: {file_names[0]}")
         reference = (
             phone.to(device, non_blocking=True),
             phone_lengths.to(device, non_blocking=True),
