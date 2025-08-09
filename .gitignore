@@ -36,3 +36,6 @@ debug/
 DEV/
 *.pyc
 rvc/train/train - SEPARATED.py
+rvc/lib/algorithm/generators/ringformer - newest - no modulo - best clean revision (2).py
+rvc/lib/algorithm/generators/ringformer - newest - modulo_mk2 - best revision (1).py
+rvc/lib/algorithm/generators/ringformer - Copy NEWST PRE CHECKPOINT.py
