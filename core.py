@@ -515,6 +515,7 @@ def run_train_script(
     g_pretrained_path: str = None,
     d_pretrained_path: str = None,
     vocoder: str = "HiFi-GAN",
+    architecture: str = "RVC",
     optimizer: str = "AdamW",
     use_checkpointing: bool = False,
     use_tf32: bool = False,
@@ -569,6 +570,7 @@ def run_train_script(
                 warmup_duration,
                 cleanup,
                 vocoder,
+                architecture,
                 optimizer,
                 use_checkpointing,
                 use_tf32,
@@ -2013,6 +2015,14 @@ def parse_arguments():
         default="HiFi-GAN",
     )
     train_parser.add_argument(
+        "--architecture",
+        type=str,
+        help="Choose the architecture. ( Only RVC is universal, others need their respective forks / frameworks.",
+        choices=["RVC", "Fork/Applio", "Fork"],
+        default="RVC",
+        required=True,
+    )  
+    train_parser.add_argument(
         "--optimizer",
         type=str,
         help="Choose an optimizer used in training.",
@@ -2527,6 +2537,7 @@ def main():
                 g_pretrained_path=args.g_pretrained_path,
                 d_pretrained_path=args.d_pretrained_path,
                 vocoder=args.vocoder,
+                architecture=args.architecture,
                 optimizer=args.optimizer,
                 use_checkpointing=args.use_checkpointing,
                 use_tf32=args.use_tf32,

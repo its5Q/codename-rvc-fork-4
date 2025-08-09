@@ -833,6 +833,7 @@ def train_tab():
                     g_pretrained_path,
                     d_pretrained_path,
                     vocoder,
+                    architecture,
                     optimizer,
                     use_checkpointing,
                     use_tf32,

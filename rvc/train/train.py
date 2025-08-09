@@ -72,7 +72,7 @@ from mel_processing import (
 
 from rvc.train.process.extract_model import extract_model
 from rvc.lib.algorithm import commons
-
+from rvc.train.utils import replace_keys_in_dict
 from pesq import pesq
 import torch_optimizer
 import auraloss
@@ -96,18 +96,19 @@ use_warmup = strtobool(sys.argv[12])
 warmup_duration = int(sys.argv[13])
 cleanup = strtobool(sys.argv[14])
 vocoder = sys.argv[15]
-optimizer_choice = sys.argv[16]
-use_checkpointing = strtobool(sys.argv[17])
-use_tf32 = bool(strtobool(sys.argv[18]))
-use_benchmark = bool(strtobool(sys.argv[19]))
-use_deterministic = bool(strtobool(sys.argv[20]))
-use_multiscale_mel_loss = strtobool(sys.argv[21])
-lr_scheduler = sys.argv[22]
-exp_decay_gamma = float(sys.argv[23])
-use_validation = strtobool(sys.argv[24])
-double_d_update = strtobool(sys.argv[25])
-use_custom_lr = strtobool(sys.argv[26])
-custom_lr_g, custom_lr_d = (float(sys.argv[27]), float(sys.argv[28])) if use_custom_lr else (None, None)
+architecture = sys.argv[16]
+optimizer_choice = sys.argv[17]
+use_checkpointing = strtobool(sys.argv[18])
+use_tf32 = bool(strtobool(sys.argv[19]))
+use_benchmark = bool(strtobool(sys.argv[20]))
+use_deterministic = bool(strtobool(sys.argv[21]))
+use_multiscale_mel_loss = strtobool(sys.argv[22])
+lr_scheduler = sys.argv[23]
+exp_decay_gamma = float(sys.argv[24])
+use_validation = strtobool(sys.argv[25])
+double_d_update = strtobool(sys.argv[26])
+use_custom_lr = strtobool(sys.argv[27])
+custom_lr_g, custom_lr_d = (float(sys.argv[28]), float(sys.argv[29])) if use_custom_lr else (None, None)
 assert not use_custom_lr or (custom_lr_g and custom_lr_d), "Invalid custom LR values."
 
 # Parse command line arguments end region ===========================
@@ -258,23 +259,44 @@ class EpochRecorder:
         return f"Current time: {current_time} | Time per epoch: {elapsed_time_str}"
 
 
-def verify_checkpoint_shapes(checkpoint_path, model):
+def verify_remap_checkpoint(checkpoint_path, model, architecture):
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     checkpoint_state_dict = checkpoint["model"]
+    print(f"Verifying checkpoint for architecture: {architecture}")
     try:
-        if hasattr(model, "module"):
-            model_state_dict = model.module.load_state_dict(checkpoint_state_dict)
-        else:
-            model_state_dict = model.load_state_dict(checkpoint_state_dict)
+        if architecture == "RVC":
+            if hasattr(model, "module"):
+                model.module.load_state_dict(checkpoint_state_dict)
+            else:
+                model.load_state_dict(checkpoint_state_dict)
+        elif architecture in ["Fork", "Fork/Applio"]:
+            print(f"non-RVC architecture pretrains detected. Checking for old keys ...")
+            if any(key.endswith(".weight_v") for key in checkpoint_state_dict.keys()) and any(key.endswith(".weight_g") for key in checkpoint_state_dict.keys()):
+                print(f"Old keys detected. Converting .weight_v and .weight_g to new format.")
+                checkpoint_state_dict = replace_keys_in_dict(
+                    checkpoint_state_dict, 
+                    ".weight_v", 
+                    ".parametrizations.weight.original1"
+                )
+                checkpoint_state_dict = replace_keys_in_dict(
+                    checkpoint_state_dict, 
+                    ".weight_g", 
+                    ".parametrizations.weight.original0"
+                )
+            else:
+                print("No old keys detected.. proceeding without remapping.")
+
+            if hasattr(model, "module"):
+                model.module.load_state_dict(checkpoint_state_dict)
+            else:
+                model.load_state_dict(checkpoint_state_dict)
+
     except RuntimeError:
-        print(
-            "The parameters of the pretrain model such as the sample rate or architecture do not match the selected model."
-        )
+        print(f"The parameters of the pretrain model such as the sample rate or architecture (Detected: {architecture}) doesn't match the selected model settings.")
         sys.exit(1)
     else:
         del checkpoint
         del checkpoint_state_dict
-        del model_state_dict
 
 
 def main():
@@ -725,52 +747,37 @@ def run(
         net_g = DDP(net_g, device_ids=[device_id]) # find_unused_parameters=True)
         net_d = DDP(net_d, device_ids=[device_id]) # find_unused_parameters=True)
 
-    # Load checkpoint if available
+    # If available, resuming from: D_*, G_* checkpoints
     try:
         print("    ██████  Starting the training ...")
         # Discriminator
         _, _, _, epoch_str = load_checkpoint(
-            latest_checkpoint_path(experiment_dir, "D_*.pth"), net_d, optim_d
+            architecture, latest_checkpoint_path(experiment_dir, "D_*.pth"), net_d, optim_d
         )
         # Generator
         _, _, _, epoch_str = load_checkpoint(
-            latest_checkpoint_path(experiment_dir, "G_*.pth"), net_g, optim_g
+            architecture, latest_checkpoint_path(experiment_dir, "G_*.pth"), net_g, optim_g
         )
 
         epoch_str += 1
         global_step = (epoch_str - 1) * len(train_loader)
         print(f"[RESUMING] (G) & (D) at global_step: {global_step} and epoch count: {epoch_str - 1}")
     except:
+    # If no checkpoints are available, using the Pretrains directly
         epoch_str = 1
         global_step = 0
 
         # Loading the pretrained Generator model
         if pretrainG != "" and pretrainG != "None":
             if rank == 0:
-                verify_checkpoint_shapes(pretrainG, net_g)
-                print(f"Loaded pretrained (G) '{pretrainG}'")
-            if hasattr(net_g, "module"):
-                net_g.module.load_state_dict(
-                    torch.load(pretrainG, map_location="cpu", weights_only=True)["model"]
-                )
-            else:
-                net_g.load_state_dict(
-                    torch.load(pretrainG, map_location="cpu", weights_only=True)["model"]
-                )
+                print(f"Loading pretrained (G) '{pretrainG}'")
+            verify_remap_checkpoint(pretrainG, net_g, architecture)
 
         # Loading the pretrained Discriminator model
         if pretrainD != "" and pretrainD != "None":
             if rank == 0:
-                print(f"Loaded pretrained (D) '{pretrainD}'")
-
-            if hasattr(net_d, "module"):
-                net_d.module.load_state_dict(
-                    torch.load(pretrainD, map_location="cpu", weights_only=True)["model"]
-                )
-            else:
-                net_d.load_state_dict(
-                    torch.load(pretrainD, map_location="cpu", weights_only=True)["model"]
-                )
+                print(f"Loading pretrained (D) '{pretrainD}'")
+            verify_remap_checkpoint(pretrainD, net_d, architecture)
 
 
     # Check if the training is ' from scratch ' and set appropriate flag
@@ -847,7 +854,7 @@ def run(
         reference = (phone, phone_lengths, pitch, pitchf, sid)
 
     else:
-        print("[WARNING] No custom reference found.")
+        print("[REFERENCE] No custom reference found.")
         info = next(iter(train_loader))
         phone, phone_lengths, pitch, pitchf, _, _, _, _, sid = info
 
@@ -858,8 +865,8 @@ def run(
 
         file_paths = train_loader.dataset.get_file_paths(batch_indices)
         file_names = [os.path.basename(path) for path in file_paths]
-        print("[FALLBACK] Fetching reference from the first batch of the train_loader")
-        print(f"[FALLBACK] Origin of the ref: {file_names[0]}")
+        print("[REFERENCE] Fetching reference from the first batch of the train_loader")
+        print(f"[REFERENCE] Origin of the ref: {file_names[0]}")
         reference = (
             phone.to(device, non_blocking=True),
             phone_lengths.to(device, non_blocking=True),
@@ -1344,6 +1351,7 @@ def training_loop(
             checkpoint_suffix = f"{2333333 if save_only_latest else global_step}.pth"
             # Save Generator checkpoint
             save_checkpoint(
+                architecture,
                 net_g,
                 optim_g,
                 config.train.learning_rate,
@@ -1352,6 +1360,7 @@ def training_loop(
             )
             # Save Discriminator checkpoint
             save_checkpoint(
+                architecture,
                 net_d,
                 optim_d,
                 config.train.learning_rate,
@@ -1395,6 +1404,7 @@ def training_loop(
                         step=global_step,
                         hps=hps,
                         vocoder=vocoder,
+                        architecture=architecture,
                     )
         if done:
             # Clean-up process IDs from config.json

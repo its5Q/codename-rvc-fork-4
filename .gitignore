@@ -39,3 +39,7 @@ rvc/train/train - SEPARATED.py
 rvc/lib/algorithm/generators/ringformer - newest - no modulo - best clean revision (2).py
 rvc/lib/algorithm/generators/ringformer - newest - modulo_mk2 - best revision (1).py
 rvc/lib/algorithm/generators/ringformer - Copy NEWST PRE CHECKPOINT.py
+rvc/train/utils - Copy.py
+rvc/train/train - Copy.py
+rvc/train/train - Copy (2) - remap active.py
+EXTRAS/transfer.py
