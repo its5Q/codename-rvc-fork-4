@@ -863,7 +863,11 @@ def run(
             batch_indices = batch  # This is the list of indices in the current batch
             break  # We only need the first batch indices
 
-        file_paths = train_loader.dataset.get_file_paths(batch_indices)
+        if isinstance(train_loader.dataset, torch.utils.data.Subset):
+            file_paths = train_loader.dataset.dataset.get_file_paths(batch_indices)
+        else:
+            file_paths = train_loader.dataset.get_file_paths(batch_indices)
+
         file_names = [os.path.basename(path) for path in file_paths]
         print("[REFERENCE] Fetching reference from the first batch of the train_loader")
         print(f"[REFERENCE] Origin of the ref: {file_names[0]}")
