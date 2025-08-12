@@ -5,7 +5,7 @@
 
 </p>
 <p align="center">
-  <a href="https://discord.gg/SkwcMjxwMq" target="_blank"> Codename's Sanctuary</a>
+  <a href="https://discord.gg/xEqDU7C2z2" target="_blank"> Codename's Sanctuary</a>
 </p>
 
 
