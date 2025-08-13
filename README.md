@@ -41,7 +41,7 @@ Expect issues with PESQ and data alignment If the following requirements are not
  
 - Support for 'Spin' embedder.  ` Needs proper pretrains. `
  
-- Ability to choose an optimizer.  ` ( Currently supporting: AdamW, AdamW_BF16, RAdam, Ranger21, DiffGrad ) `
+- Ability to choose an optimizer.  ` ( Currently supporting: AdamW, AdamW_BF16, RAdam, Ranger21, DiffGrad, Prodigy ) `
  
 - Double-update strategy for Discriminator.
  
@@ -49,7 +49,7 @@ Expect issues with PESQ and data alignment If the following requirements are not
  
 - Mel spectrogram %-based similarity metric.
  
-- Support for Multi-scale and classic L1 mel loss.
+- Support for Multi-scale, classic L1 mel and multi-resolution stft spectral losses.
  
 - Support for the following vocoders: HiFi-GAN, MRF-HiFi-gan, Refine-GAN, RingFormer.  ` ( And their respective pretrains. ) `
  
