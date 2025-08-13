@@ -657,10 +657,11 @@ def train_tab():
                         value=False,
                         interactive=True,
                     )
-                    use_multiscale_mel_loss = gr.Checkbox(
-                        label="Use Multi-scale Mel loss function",
-                        info="Multi-Scale Mel Loss function: More strict, can potentially yield better results. \n Uncheck to use the less strict L1 Mel loss ( aka. single-scale ). \nMore forgiving but less accurate ( More stable than MultiScale ).",
-                        value=False,
+                    spectral_loss = gr.Radio(
+                        label="Spectral loss",
+                        info="- **L1 Mel Loss** - L1-type mel spectrogram loss; Standard and safe default. \n- **Multi-Scale Mel Loss** - Mel spectrogram loss that utilizes multiple-scales. \n- **Multi-Res STFT Loss** - STFT spectrogram based loss that utilizes multiple-resolutions; EXPERIMENTAL. ",
+                        choices=["L1 Mel Loss", "Multi-Scale Mel Loss", "Multi-Res STFT Loss"],
+                        value="L1 Mel Loss",
                         interactive=True,
                     )
                     lr_scheduler = gr.Radio(
@@ -681,7 +682,7 @@ def train_tab():
                     use_validation = gr.Checkbox(
                         label="Enable hold-out validation",
                         info="Enabled by default. **Requires carefully handled dataset!**",
-                        value=True,
+                        value=False,
                         interactive=True,
                     )
                     double_d_update = gr.Checkbox(
@@ -839,7 +840,7 @@ def train_tab():
                     use_tf32,
                     use_benchmark,
                     use_deterministic,
-                    use_multiscale_mel_loss,
+                    spectral_loss,
                     lr_scheduler,
                     exp_decay_gamma,
                     use_validation,

@@ -102,7 +102,7 @@ use_checkpointing = strtobool(sys.argv[18])
 use_tf32 = bool(strtobool(sys.argv[19]))
 use_benchmark = bool(strtobool(sys.argv[20]))
 use_deterministic = bool(strtobool(sys.argv[21]))
-use_multiscale_mel_loss = strtobool(sys.argv[22])
+spectral_loss = sys.argv[22]
 lr_scheduler = sys.argv[23]
 exp_decay_gamma = float(sys.argv[24])
 use_validation = strtobool(sys.argv[25])
@@ -152,6 +152,8 @@ enable_persistent_workers = True
 debug_shapes = False
 
 # EXPERIMENTAL
+c_stft = 21.0 # 18.0
+
 
 import logging
 logging.getLogger("torch").setLevel(logging.ERROR)
@@ -234,6 +236,21 @@ def si_sdr(preds, target, eps=1e-8):
     si_sdr_value = 10 * torch.log10((projection ** 2).sum(dim=-1) / (noise ** 2).sum(dim=-1) + eps)
 
     return si_sdr_value.mean()
+
+# Mel spectrogram torch helper ( waveform -> spec -> mel spec ):
+def wave_to_mel (waveform):
+    mel_spec = mel_spectrogram_torch(
+        waveform.float().squeeze(1),
+        config.data.filter_length,
+        config.data.n_mel_channels,
+        config.data.sample_rate,
+        config.data.hop_length,
+        config.data.win_length,
+        config.data.mel_fmin,
+        config.data.mel_fmax,
+    )
+
+    return mel_spec
 
 # --------------------------   Custom functions End here   --------------------------
 
@@ -439,7 +456,7 @@ def run(
 
     # Warmup init msg:
     if rank == 0 and use_warmup:
-        print(f"    ██████  Warmup Enabled for {warmup_duration} epochs.")
+        print(f"    ██████  Warmup Enabled for: {warmup_duration} epochs.")
 
     # Precision init msg:
     if not config.train.bf16_run:
@@ -723,33 +740,41 @@ def run(
         optim_g = new_optim(net_g.parameters(), **common_args_g, **extra_args)
         optim_d = new_optim(net_d.parameters(), **common_args_d, **extra_args)
 
-        or for chained disc optim:
+        Or for chained disc optim:
         combined_disc_params = itertools.chain(net_d_A.parameters(), net_d_B.parameters())
         optim_d = new_optim(combined_disc_params, **common_args_d, **extra_args)
     '''
 
-# 836
-#    if stft_for_mel:
-#        stft_loss = MultiResolutionSTFTLoss(
-#            fft_sizes=[1024, 2048, 512],
-#            hop_sizes=[512, 1024, 256],
-#            win_lengths=[1024, 2048, 512],
-#            window='hann_window',
-#            w_sc=1.0,
-#            w_log_mag=1.0,
-#            w_lin_mag=0.0,
-#            w_phs=0.0,
-#            sample_rate=sample_rate,
-#            scale=None,
-#            n_bins=None
-#        )
-
-    if use_multiscale_mel_loss:
-        fn_mel_loss = MultiScaleMelSpectrogramLoss(sample_rate=sample_rate)
-        print("    ██████  Using Multi-Scale Mel loss function")
+    if spectral_loss == "L1 Mel Loss":
+        fn_spectral_loss = torch.nn.L1Loss()
+        print("    ██████  Spectral loss: Single-Scale (L1) Mel loss function")
+    elif spectral_loss == "Multi-Scale Mel Loss":
+        fn_spectral_loss = MultiScaleMelSpectrogramLoss(sample_rate=sample_rate)
+        print("    ██████  Spectral loss: Multi-Scale Mel loss function")
+    elif spectral_loss == "Multi-Res STFT Loss":
+        fn_spectral_loss = auraloss.freq.MultiResolutionSTFTLoss(
+            fft_sizes = [1024, 2048, 512],
+            hop_sizes = [80, 160, 40],      # stock: 120, 240, 50
+            win_lengths = [480, 960, 240],  # stock: 600, 1200, 240
+            window = "hann_window",
+            w_sc = 1.0,
+            w_log_mag = 1.0,
+            w_lin_mag = 0.0,
+            w_phs=0.0,
+            sample_rate = sample_rate,
+            scale = None,
+            n_bins = None,
+            perceptual_weighting = True,
+            scale_invariance = False,
+            output= "loss",      # "loss", "full"
+            reduction = "mean",  # "none", "mean", "sum"
+            mag_distance = "L1", # "L1", "L2"
+            device=device,
+        )
+        print("    ██████  Spectral loss: Multi-Resolution STFT loss function")
     else:
-        fn_mel_loss = torch.nn.L1Loss()
-        print("    ██████  Using Single-Scale (L1) Mel loss function")
+        print(" //// ERROR //// CHOSEN SPECTRAL LOSS IS UNDEFINED / UNSUPPORTED. EXITING.")
+        sys.exit(1)
 
 
     # Wrap models with DDP for multi-gpu processing
@@ -905,7 +930,7 @@ def run(
             device,
             device_id,
             reference,
-            fn_mel_loss,
+            fn_spectral_loss,
             n_gpus,
             hann_window,
         )
@@ -950,7 +975,7 @@ def training_loop(
     device,
     device_id,
     reference,
-    fn_mel_loss,
+    fn_spectral_loss,
     n_gpus,
     hann_window=None,
 ):
@@ -1063,7 +1088,7 @@ def training_loop(
                 else:
                     y_hat, ids_slice, x_mask, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q) = (model_output)
 
-                # Slice the y ( original waveform ) to match the generated slice:
+                # Slice the original waveform ( y ) to match the generated slice:
                 if randomized:
                     y = commons.slice_segments(
                         y,
@@ -1078,7 +1103,6 @@ def training_loop(
                 y_stft = torch.stft(reshaped_y, n_fft=hps.model.gen_istft_n_fft, hop_length=hps.model.gen_istft_hop_size, win_length=hps.model.gen_istft_n_fft, window=hann_window, return_complex=True)
                 y_hat_stft = torch.stft(reshaped_y_hat, n_fft=hps.model.gen_istft_n_fft, hop_length=hps.model.gen_istft_hop_size, win_length=hps.model.gen_istft_n_fft, window=hann_window, return_complex=True)
                 target_magnitude = torch.abs(y_stft)  # shape: [B, F, T]
-
 
             # Discriminator forward pass:
             for _ in range(d_updates_per_step):  # default is 1 update per step
@@ -1104,33 +1128,16 @@ def training_loop(
                 _, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
 
             # Compute generator losses:
-            # Multi-Scale and L1 mel loss:
-            if use_multiscale_mel_loss:
-                loss_mel = fn_mel_loss(y, y_hat) * config.train.c_mel / 3.0
-            else:
-                y_hat_mel = mel_spectrogram_torch(
-                    y_hat.float().squeeze(1),
-                    config.data.filter_length,
-                    config.data.n_mel_channels,
-                    config.data.sample_rate,
-                    config.data.hop_length,
-                    config.data.win_length,
-                    config.data.mel_fmin,
-                    config.data.mel_fmax,
-                )
-                mel = spec_to_mel_torch(
-                    spec,
-                    config.data.filter_length,
-                    config.data.n_mel_channels,
-                    config.data.sample_rate,
-                    config.data.mel_fmin,
-                    config.data.mel_fmax,
-                )
-                if randomized:
-                    y_mel = commons.slice_segments(mel, ids_slice, config.train.segment_size // config.data.hop_length, dim=3)
-                else:
-                    y_mel = mel
-                loss_mel = fn_mel_loss(y_mel, y_hat_mel) * config.train.c_mel
+
+            # Spectral loss ( In code kept referenced as "loss_mel" to avoid confusion in old logs / graphs):
+            if spectral_loss == "L1 Mel Loss":
+                y_mel = wave_to_mel(y)
+                y_hat_mel = wave_to_mel(y_hat)
+                loss_mel = fn_spectral_loss(y_mel, y_hat_mel) * config.train.c_mel
+            elif spectral_loss == "Multi-Scale Mel Loss":
+                loss_mel = fn_spectral_loss(y, y_hat) * config.train.c_mel / 3.0
+            elif spectral_loss == "Multi-Res STFT Loss":
+                loss_mel = fn_spectral_loss(y_hat, y) * c_stft
 
             # Feature Matching loss
             loss_fm = feature_loss(fmap_r, fmap_g)
@@ -1271,16 +1278,8 @@ def training_loop(
             y_mel = mel
 
         # used for tensorboard chart - slice/mel_gen
-        y_hat_mel = mel_spectrogram_torch(
-            y_hat.float().squeeze(1),
-            config.data.filter_length,
-            config.data.n_mel_channels,
-            config.data.sample_rate,
-            config.data.hop_length,
-            config.data.win_length,
-            config.data.mel_fmin,
-            config.data.mel_fmax,
-        )
+        y_hat_mel = wave_to_mel(y_hat)
+
         # Mel similarity metric:
         mel_similarity = mel_spec_similarity(y_hat_mel, y_mel)
         print(f'Mel Spectrogram Similarity: {mel_similarity:.2f}%')
@@ -1476,35 +1475,19 @@ def validation_loop(net_g, val_loader, device, hps, writer, global_step):
 
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validating"):
-            phone, phone_lengths, pitch, pitchf, spec, spec_lengths, y, _, sid = [
-                t.to(device) for t in batch
-            ]
+            phone, phone_lengths, pitch, pitchf, spec, spec_lengths, y, _, sid = [t.to(device) for t in batch]
 
-            # Infer
+        # Infer
             y_hat, x_mask, _ = net_g.infer(phone, phone_lengths, pitch, pitchf, sid)
 
+        # Get reference min-length ( according to gt wave's length )
             y_len = y.shape[-1]
 
-            y_hat_mel = mel_spectrogram_torch(
-                y_hat.squeeze(1),
-                hps.data.filter_length,
-                hps.data.n_mel_channels,
-                sample_rate,
-                hop_length,
-                hps.data.win_length,
-                hps.data.mel_fmin,
-                hps.data.mel_fmax,
-            )
-            mel = spec_to_mel_torch(
-                spec,
-                hps.data.filter_length,
-                hps.data.n_mel_channels,
-                sample_rate,
-                hps.data.mel_fmin,
-                hps.data.mel_fmax,
-            )
+        # Obtaining mel specs
+            y_hat_mel = wave_to_mel(y_hat) # generator-source mel
+            mel = wave_to_mel(y) # gt-source mel
 
-            # Mel loss:
+        # Mel loss:
             y_hat_mel_len = y_hat_mel.shape[-1]
             mel_len = mel.shape[-1]
 
@@ -1513,7 +1496,7 @@ def validation_loop(net_g, val_loader, device, hps, writer, global_step):
             mel_loss = F.l1_loss(y_hat_mel[..., :min_t], mel[..., :min_t])
             total_mel_error += mel_loss.item()
 
-            # STFT loss:
+        # STFT loss:
             y_hat_len = y_hat.shape[-1]
 
             min_samples = min_t * hop_length
@@ -1522,11 +1505,11 @@ def validation_loop(net_g, val_loader, device, hps, writer, global_step):
             stft_loss = mrstft(y_hat[..., :min_samples], y[..., :min_samples])
             total_mrstft_loss += stft_loss.item()
 
-            # si_sdr:
+        # si_sdr:
             si_sdr_score = si_sdr(y_hat.squeeze(1), y.squeeze(1))
             total_si_sdr += si_sdr_score.item()
 
-            # PESQ:
+        # PESQ:
             try:
                 y_16k_batch = resample_to_16k(y).cpu().numpy()          # (B, T)
                 y_hat_16k_batch = resample_to_16k(y_hat.squeeze(1)).cpu().numpy()  # (B, T)

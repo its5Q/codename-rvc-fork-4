@@ -521,7 +521,7 @@ def run_train_script(
     use_tf32: bool = False,
     use_benchmark: bool = True,
     use_deterministic: bool = False,
-    use_multiscale_mel_loss: bool = False,
+    spectral_loss: str = "L1 Mel Loss",
     lr_scheduler: str = "exp decay",
     exp_decay_gamma: str = "0.999875",
     use_validation: bool = True,
@@ -576,7 +576,7 @@ def run_train_script(
                 use_tf32,
                 use_benchmark,
                 use_deterministic,
-                use_multiscale_mel_loss,
+                spectral_loss,
                 lr_scheduler,
                 exp_decay_gamma,
                 use_validation,
@@ -2163,11 +2163,12 @@ def parse_arguments():
         default=False,
     )
     train_parser.add_argument(
-        "--use_multiscale_mel_loss",
-        type=lambda x: bool(strtobool(x)),
-        choices=[True, False],
-        help="Lets you switch between a multi-scale mel loss and L1 single-scale loss.",
-        default=False,
+        "--spectral_loss",
+        type=str,
+        choices=["L1 Mel Loss", "Multi-Scale Mel Loss", "Multi-Res STFT Loss"],
+        help="Available types of spectral loss functions. ",
+        default="L1 Mel Loss",
+        required=True,
     )
     train_parser.add_argument(
         "--lr_scheduler",
@@ -2175,7 +2176,7 @@ def parse_arguments():
         choices=["exp decay", "cosine annealing", "none"],
         help="Available schedulers: exp decay, cosine annealing, none ",
         default="exp decay",
-        required=True,
+        required=False,
     )
     train_parser.add_argument(
         "--exp_decay_gamma",
@@ -2189,7 +2190,8 @@ def parse_arguments():
         type=lambda x: bool(strtobool(x)),
         choices=[True, False],
         help="Whether to use hold-out validation",
-        default=True,
+        default=False,
+        required=True,
     )
     train_parser.add_argument(
         "--double_d_update",
@@ -2543,7 +2545,7 @@ def main():
                 use_tf32=args.use_tf32,
                 use_benchmark=args.use_benchmark,
                 use_deterministic=args.use_deterministic,
-                use_multiscale_mel_loss=args.use_multiscale_mel_loss,
+                spectral_loss=args.spectral_loss,
                 lr_scheduler=args.lr_scheduler,
                 exp_decay_gamma=args.exp_decay_gamma,
                 use_validation=args.use_validation,

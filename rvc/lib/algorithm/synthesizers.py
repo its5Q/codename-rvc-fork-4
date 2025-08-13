@@ -78,7 +78,7 @@ class Synthesizer(torch.nn.Module):
                     harmonic_num=8,
                     checkpointing=checkpointing,
                 )
-                print("    ██████  Vocoder: NSF-HiFi-GAN ( MRF VARIANT )         ██████")
+                print("    ██████  Vocoder: NSF-HiFi-GAN ( MRF VARIANT )")
             elif vocoder == "RefineGAN":
                 self.dec = RefineGANGenerator(
                     sample_rate=sr,
@@ -88,7 +88,7 @@ class Synthesizer(torch.nn.Module):
                     num_mels=inter_channels,
                     checkpointing=checkpointing,
                 )
-                print("    ██████  Vocoder: RefineGAN                            ██████")
+                print("    ██████  Vocoder: RefineGAN")
             elif vocoder == "RingFormer":
                 self.dec = RingFormerGenerator(
                     initial_channel=inter_channels,
@@ -103,7 +103,7 @@ class Synthesizer(torch.nn.Module):
                     sr=sr,
                     checkpointing=checkpointing,
                 )
-                print("    ██████  Vocoder: RingFormer                           ██████")
+                print("    ██████  Vocoder: RingFormer")
             else:
                 self.dec = HiFiGANNSFGenerator(
                     inter_channels,
@@ -116,7 +116,7 @@ class Synthesizer(torch.nn.Module):
                     sr=sr,
                     checkpointing=checkpointing,
                 )
-                print("    ██████  Vocoder: NSF-HiFi-GAN.                        ██████")
+                print("    ██████  Vocoder: NSF-HiFi-GAN.")
         else:
             if vocoder == "MRF HiFi-GAN":
                 print("MRF HiFi-GAN does not support training without pitch guidance.")
