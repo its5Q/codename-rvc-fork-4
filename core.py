@@ -2026,7 +2026,7 @@ def parse_arguments():
         "--optimizer",
         type=str,
         help="Choose an optimizer used in training.",
-        choices=["AdamW_BF16", "AdamW", "RAdam", "Ranger21", "DiffGrad"],
+        choices=["AdamW_BF16", "AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"],
         default="AdamW_BF16",
     )
     train_parser.add_argument(
