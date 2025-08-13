@@ -52,6 +52,7 @@ Expect issues with PESQ and data alignment If the following requirements are not
 - Support for Multi-scale, classic L1 mel and multi-resolution stft spectral losses.
  
 - Support for the following vocoders: HiFi-GAN, MRF-HiFi-gan, Refine-GAN, RingFormer.  ` ( And their respective pretrains. ) `
+` RingFormer architecture consists of: RingFormer vocoder ( Conformer + RingAttention, snake activation ((in: resblock, vocoder)) ) + MPD, MSD, MRD Discriminators.`
  
 - Checkpointing and various speed / memory optimizations compared to og RVC.
  
