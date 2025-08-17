@@ -56,7 +56,7 @@ names = [
     for root, _, files in os.walk(model_root_relative, topdown=False)
     for file in files
     if (
-        file.endswith((".pth", ".onnx", ".uvmp"))
+        file.endswith((".pth", ".uvmp"))
         and not (file.startswith("G_") or file.startswith("D_"))
     )
 ]
@@ -185,7 +185,7 @@ def change_choices(model):
         for root, _, files in os.walk(model_root_relative, topdown=False)
         for file in files
         if (
-            file.endswith((".pth", ".onnx", ".uvmp"))
+            file.endswith((".pth", ".uvmp"))
             and not (file.startswith("G_") or file.startswith("D_"))
         )
     ]
@@ -336,7 +336,6 @@ def refresh_embedders_folders():
     ]
     return custom_embedders
 
-
 def get_speakers_id(model):
     if not model or not os.path.exists(os.path.join(now_dir, model)):
         return [0]
@@ -372,7 +371,7 @@ def inference_tab():
         with gr.Row():
             model_file = gr.Dropdown(
                 label="Voice Model",
-                info="Select the voice model (.pth, .onnx, or .uvmp) used for inference.",
+                info="Select the voice model (.pth or .uvmp) used for inference.",
                 choices=sorted(names, key=lambda x: extract_model_and_epoch(x)),
                 interactive=True,
                 value=default_weight,
@@ -422,7 +421,7 @@ def inference_tab():
                     gr.update(visible=False, value=speaker_val, choices=speakers),
                 )
             else:
-                # .pth/.onnx selected: Restore index_file and show original sid
+                # .pth selected: Restore index_file and show original sid
                 return (
                     gr.update(
                         label="Index File",
@@ -475,6 +474,12 @@ def inference_tab():
                     info="Choose the audio export format.",
                     choices=["WAV", "MP3", "FLAC", "OGG", "M4A"],
                     value="WAV",
+                    interactive=True,
+                )
+                seed = gr.Number(
+                    label="Inference Seed",
+                    info="Specify any seed to be used for inference or leave at '0' for random outputs. ( Classic RVC behavior. )",
+                    value=0,
                     interactive=True,
                 )
                 sid = gr.Dropdown(
@@ -2118,6 +2123,7 @@ def inference_tab():
             delay_feedback,
             delay_mix,
             sid,
+            seed,
         ],
         outputs=[vc_output1, vc_output2],
     )
@@ -2185,6 +2191,7 @@ def inference_tab():
             delay_feedback_batch,
             delay_mix_batch,
             sid_batch,
+            seed,
         ],
         outputs=[vc_output3],
     )

@@ -221,6 +221,7 @@ class VoiceConverter:
         post_process: bool = False,
         resample_sr: int = 0,
         sid: int = 0,
+        seed: int = 0,
         **kwargs,
     ):
         """
@@ -248,6 +249,7 @@ class VoiceConverter:
             embedder_model_custom (str): Path to the custom embedder model.
             resample_sr (int, optional): Resample sampling rate. Default is 0.
             sid (int, optional): Speaker ID. Default is 0.
+            seed: (int): Seed for randomization of noise.
             **kwargs: Additional keyword arguments.
         """
         if not model_path:
@@ -317,6 +319,7 @@ class VoiceConverter:
                     f0_autotune=f0_autotune,
                     f0_autotune_strength=f0_autotune_strength,
                     f0_file=f0_file,
+                    seed=seed,
                     loaded_index=self.loaded_index,
                 )
                 converted_chunks.append(audio_opt)

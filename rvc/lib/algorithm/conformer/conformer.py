@@ -128,11 +128,10 @@ class ConformerBlock(nn.Module):
         ff_dropout = 0.,
         conv_dropout = 0.,
         conv_causal = False,
-        block_size = 512,
     ):
         super().__init__()
         self.ff1 = FeedForward(dim = dim, mult = ff_mult, dropout = ff_dropout)
-        self.attn = RingAttention(dim = dim, dim_head = dim_head, heads = heads, causal=True, auto_shard_seq=True, bucket_size=block_size, ring_attn=True, ring_seq_size=512)
+        self.attn = RingAttention(dim = dim, dim_head = dim_head, heads = heads, causal=True, auto_shard_seq=True, ring_attn=True, ring_seq_size=512)
         self.self_attn_dropout = torch.nn.Dropout(attn_dropout)
         self.conv = ConformerConvModule(dim = dim, causal = conv_causal, expansion_factor = conv_expansion_factor, kernel_size = conv_kernel_size, dropout = conv_dropout)
         self.ff2 = FeedForward(dim = dim, mult = ff_mult, dropout = ff_dropout)
@@ -169,7 +168,6 @@ class Conformer(nn.Module):
         ff_dropout = 0.,
         conv_dropout = 0.,
         conv_causal = False,
-        block_size = 512, #
     ):
         super().__init__()
         self.dim = dim
@@ -183,7 +181,6 @@ class Conformer(nn.Module):
                 conv_expansion_factor = conv_expansion_factor,
                 conv_kernel_size = conv_kernel_size,
                 conv_causal = conv_causal,
-                block_size = block_size #
 
             ))
 

@@ -422,6 +422,7 @@ class Pipeline:
         index_rate,
         version,
         protect,
+        seed,
     ):
         """
         Performs voice conversion on a given audio segment.
@@ -438,6 +439,7 @@ class Pipeline:
             index_rate: Blending rate for speaker embedding retrieval.
             version: Model version (Keep to support old models).
             protect: Protection level for preserving the original pitch.
+            seed: Seed for randomization of noise.
         """
 
         with torch.no_grad():
@@ -475,7 +477,6 @@ class Pipeline:
             # adjust the length if the audio is short
             p_len = min(audio0.shape[0] // self.window, feats.shape[1])
 
-
             if pitch_guidance:
                 feats0 = F.interpolate(feats0.permute(0, 2, 1), scale_factor=2).permute(
                     0, 2, 1
@@ -495,7 +496,7 @@ class Pipeline:
             p_len = torch.tensor([p_len], device=self.device).long()
 
             audio1 = (
-                (net_g.infer(feats.float(), p_len, pitch, pitchf.float(), sid)[0][0, 0])
+                (net_g.infer(feats.float(), p_len, pitch, pitchf.float(), sid, seed)[0][0, 0])
                 .data.cpu()
                 .float()
                 .numpy()
@@ -537,6 +538,7 @@ class Pipeline:
         f0_autotune,
         f0_autotune_strength,
         f0_file,
+        seed,
         loaded_index=None,
     ):
         """
@@ -562,6 +564,7 @@ class Pipeline:
             hop_length: Hop length for F0 estimation methods.
             f0_autotune: Whether to apply autotune to the F0 contour.
             f0_file: Path to a file containing an F0 contour to use.
+            seed: Seed for randomization of noise.
             loaded_index: A pre-loaded FAISS index object.
         """
         # Index handling
@@ -659,6 +662,7 @@ class Pipeline:
                         index_rate,
                         version,
                         protect,
+                        seed,
                     )[self.t_pad_tgt : -self.t_pad_tgt]
                 )
             else:
@@ -675,6 +679,7 @@ class Pipeline:
                         index_rate,
                         version,
                         protect,
+                        seed,
                     )[self.t_pad_tgt : -self.t_pad_tgt]
                 )
 
@@ -694,6 +699,7 @@ class Pipeline:
                     index_rate,
                     version,
                     protect,
+                    seed,
                 )[self.t_pad_tgt : -self.t_pad_tgt]
             )
         else:
@@ -710,6 +716,7 @@ class Pipeline:
                     index_rate,
                     version,
                     protect,
+                    seed,
                 )[self.t_pad_tgt : -self.t_pad_tgt]
             )
         audio_opt = np.concatenate(audio_opt)

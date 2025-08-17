@@ -1,5 +1,6 @@
 import torch
 from typing import Optional
+import random
 
 # Generators
 from rvc.lib.algorithm.generators.hifigan_mrf import HiFiGANMRFGenerator
@@ -275,6 +276,7 @@ class Synthesizer(torch.nn.Module):
         pitch: Optional[torch.Tensor] = None,
         nsff0: Optional[torch.Tensor] = None,
         sid: torch.Tensor = None,
+        seed: int = 0,
         rate: Optional[torch.Tensor] = None,
     ):
         """
@@ -287,9 +289,23 @@ class Synthesizer(torch.nn.Module):
             nsff0 (torch.Tensor, optional): Fine-grained pitch sequence.
             sid (torch.Tensor): Speaker embedding.
             rate (torch.Tensor, optional): Rate for time-stretching.
+            seed (int, optional): Seed for randomization of noise.
         """
         g = self.emb_g(sid).unsqueeze(-1)
         m_p, logs_p, x_mask = self.enc_p(phone, pitch, phone_lengths)
+
+        if seed != 0:
+            torch.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+            print(f"[INFER] Seed specified; Inference is performed in deterministic mode using seed:{seed}.")
+        else:
+            print(f"[INFER] Seed kept at: {seed}; Inference is performed in randomized mode.")
+            rand_seed = random.randint(0, 2**32 - 1)  # 32-bit seed range
+            random.seed(rand_seed)
+            torch.manual_seed(rand_seed)
+            torch.cuda.manual_seed_all(rand_seed)
+            print(f"[INFER] Randomized seed: {rand_seed}; Exposed for reproduction.")
+
         z_p = (m_p + torch.exp(logs_p) * torch.randn_like(m_p) * 0.66666) * x_mask
 
         if rate is not None:
@@ -301,8 +317,7 @@ class Synthesizer(torch.nn.Module):
 
         z = self.flow(z_p, x_mask, g=g, reverse=True)
 
-        #print("[INFER] pitchf:", nsff0.shape, nsff0.min(), nsff0.max())
-        if not self.is_ringformer: # Non RingFormer
+        if not self.is_ringformer:  # Non RingFormer
             o = (self.dec(z * x_mask, nsff0, g=g) if self.use_f0 else self.dec(z * x_mask, g=g))
         else:
             o, _, _ = self.dec(z * x_mask, nsff0, g=g)

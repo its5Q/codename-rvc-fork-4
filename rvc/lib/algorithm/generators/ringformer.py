@@ -275,7 +275,6 @@ class RingFormerGenerator(torch.nn.Module):
         gin_channels, # 256
         sr, # 24000, 48000, 
         harmonic_num = 8, # NFS Patch
-        block_size_custom = 512,
         inplace_masking = False,
         checkpointing: bool = False,
     ):
@@ -354,7 +353,6 @@ class RingFormerGenerator(torch.nn.Module):
         self.alphas.append(nn.Parameter(torch.ones(1, upsample_initial_channel, 1)))
         self.resblocks = nn.ModuleList()
 
-
         for i in range(len(self.ups)):
             ch = upsample_initial_channel // (2 ** (i + 1))
             self.alphas.append(nn.Parameter(torch.ones(1, ch, 1)))
@@ -366,7 +364,6 @@ class RingFormerGenerator(torch.nn.Module):
         self.conformers = nn.ModuleList()
         self.post_n_fft = self.gen_istft_n_fft
         self.conv_post = weight_norm(Conv1d(128, self.post_n_fft + 2, 7, 1, padding=3))
-
 
         for i in range(len(self.ups)):
             ch = upsample_initial_channel // (2 ** i)
@@ -382,7 +379,6 @@ class RingFormerGenerator(torch.nn.Module):
                     attn_dropout=0.1,
                     ff_dropout=0.1,
                     conv_dropout=0.1,
-                    block_size=block_size_custom,
                 )
             )
 

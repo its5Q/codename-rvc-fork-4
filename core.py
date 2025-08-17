@@ -111,6 +111,7 @@ def run_infer_script(
     delay_feedback: float = 0.0,
     delay_mix: float = 0.5,
     sid: int = 0,
+    seed: int = 0,
 ):
     kwargs = {
         "audio_input_path": input_path,
@@ -175,6 +176,7 @@ def run_infer_script(
         "delay_feedback": delay_feedback,
         "delay_mix": delay_mix,
         "sid": sid,
+        "seed": seed,
     }
     infer_pipeline = import_voice_converter()
     infer_pipeline.convert_audio(
@@ -247,6 +249,7 @@ def run_batch_infer_script(
     delay_feedback: float = 0.0,
     delay_mix: float = 0.5,
     sid: int = 0,
+    seed: int = 0,
 ):
     kwargs = {
         "audio_input_paths": input_folder,
@@ -311,6 +314,7 @@ def run_batch_infer_script(
         "delay_feedback": delay_feedback,
         "delay_mix": delay_mix,
         "sid": sid,
+        "seed": seed,
     }
     infer_pipeline = import_voice_converter()
     infer_pipeline.convert_audio_batch(
@@ -392,6 +396,7 @@ def run_tts_script(
         embedder_model=embedder_model,
         embedder_model_custom=embedder_model_custom,
         sid=sid,
+        seed=seed,
         formant_shifting=None,
         formant_qfrency=None,
         formant_timbre=None,

@@ -886,7 +886,7 @@ def run(
         pitchf = torch.FloatTensor(pitchf).unsqueeze(0).to(device)
 
         sid = torch.LongTensor([0]).to(device)
-        reference = (phone, phone_lengths, pitch, pitchf, sid)
+        reference = (phone, phone_lengths, pitch, pitchf, sid, config.train.seed)
 
     else:
         print("[REFERENCE] No custom reference found.")
@@ -912,6 +912,7 @@ def run(
             pitch.to(device, non_blocking=True),
             pitchf.to(device, non_blocking=True),
             sid.to(device, non_blocking=True),
+            config.train.seed,
         )
 
     for epoch in range(epoch_str, total_epoch + 1):
