@@ -147,8 +147,8 @@ torch.backends.cudnn.deterministic = use_deterministic
 
 # Globals ( tweakable )
 
-randomized = False
-benchmark_mode = True
+randomized = True
+benchmark_mode = False
 enable_persistent_workers = True
 debug_shapes = False
 
