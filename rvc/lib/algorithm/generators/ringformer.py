@@ -16,7 +16,7 @@ from torch.utils.checkpoint import checkpoint
 import einops
 import numpy as np
 
-from rvc.lib.algorithm.residuals import ResBlock, ResBlock_Snake, ResBlock_Snake_Fused
+from rvc.lib.algorithm.residuals import ResBlock, ResBlock_Snake, ResBlock_Snake_Fused, ResBlock_SnakeBeta
 from rvc.lib.algorithm.conformer.conformer import Conformer
 
 from rvc.lib.algorithm.commons import init_weights
@@ -259,8 +259,6 @@ class SourceModuleHnNSF(torch.nn.Module):
 
             return sine_merge, noise, uv
 
-
-
 class RingFormerGenerator(torch.nn.Module):
     def __init__(
         self,
@@ -275,7 +273,6 @@ class RingFormerGenerator(torch.nn.Module):
         gin_channels, # 256
         sr, # 24000, 48000, 
         harmonic_num = 8, # NFS Patch
-        inplace_masking = False,
         checkpointing: bool = False,
     ):
         super(RingFormerGenerator, self).__init__()
@@ -293,11 +290,11 @@ class RingFormerGenerator(torch.nn.Module):
         Available ResBlock types:
 
             - ResBlock:  HiFi-Gan's 'ResBlock1' without any extras
-            - ResBlock_Snake:  'ResBlock1' enriched with most basic Snake activation variant ( Borrowed from 'RiFornet' ) ; https://github.com/Respaired/RiFornet_Vocoder
+            - ResBlock_Snake:  'ResBlock1' enriched with Snake activation ( Borrowed from 'RiFornet' ) ; https://github.com/Respaired/RiFornet_Vocoder
             - ResBlock_Snake_Fused:  'ResBlock1' I modified by adding in Snake activation with triton fused kernel ( Forward, Backward ) ; https://github.com/falkaer/pytorch-snake
+            - ResBlock_SnakeBeta: 'ResBlock1' which is using Snake-Beta instead of Snake. Has learnable both alphas and betas ; https://github.com/NVIDIA/BigVGAN/blob/main/activations.py
         '''
-        ResBlock_Type = ResBlock_Snake_Fused
-
+        ResBlock_Type = ResBlock_SnakeBeta # ResBlock_Snake_Fused
 
         self.m_source = SourceModuleHnNSF(
             sample_rate=sr,
@@ -348,9 +345,9 @@ class RingFormerGenerator(torch.nn.Module):
                 self.noise_convs.append(Conv1d(self.gen_istft_n_fft + 2, c_cur, kernel_size=1))
                 self.noise_res.append(ResBlock_Type(c_cur, 11, [1, 3, 5]))
 
-
         self.alphas = nn.ParameterList()
         self.alphas.append(nn.Parameter(torch.ones(1, upsample_initial_channel, 1)))
+
         self.resblocks = nn.ModuleList()
 
         for i in range(len(self.ups)):
@@ -475,10 +472,8 @@ class RingFormerGenerator(torch.nn.Module):
                         xs += self.resblocks[i * self.num_kernels + j](x)
                 x = xs / self.num_kernels
 
-        # x = F.leaky_relu(x)
-
         x = x + (1 / self.alphas[i + 1]) * (torch.sin(self.alphas[i + 1] * x) ** 2)
-        
+
         x = self.conv_post(x)
 
         spec = torch.exp(x[:, :self.post_n_fft // 2 + 1, :])

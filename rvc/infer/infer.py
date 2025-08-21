@@ -208,7 +208,6 @@ class VoiceConverter:
         index_rate: float = 0.75,
         volume_envelope: float = 1,
         protect: float = 0.5,
-        hop_length: int = 128,
         split_audio: bool = False,
         f0_autotune: bool = False,
         f0_autotune_strength: float = 1,
@@ -233,7 +232,6 @@ class VoiceConverter:
             index_rate (float): Rate for index matching.
             volume_envelope (int): RMS mix rate.
             protect (float): Protection rate for certain audio segments.
-            hop_length (int): Hop length for audio processing.
             f0_method (str): Method for F0 extraction.
             audio_input_path (str): Path to the input audio file.
             audio_output_path (str): Path to the output audio file.
@@ -315,7 +313,6 @@ class VoiceConverter:
                     volume_envelope=volume_envelope,
                     version=self.version,
                     protect=protect,
-                    hop_length=hop_length,
                     f0_autotune=f0_autotune,
                     f0_autotune_strength=f0_autotune_strength,
                     f0_file=f0_file,

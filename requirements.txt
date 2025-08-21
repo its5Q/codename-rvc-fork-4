@@ -44,7 +44,7 @@ gradio==5.23.1
 
 # Miscellaneous utilities
 tensorboardX
-edge-tts==6.1.9
+edge-tts==7.2.0
 pypresence
 beautifulsoup4
 flask

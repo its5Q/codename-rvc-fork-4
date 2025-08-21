@@ -16,9 +16,9 @@ sys.path.append(os.path.join(now_dir))
 # Zluda hijack
 import rvc.lib.zluda
 
-from rvc.lib.utils import load_audio, load_embedding
+from rvc.lib.utils import load_audio_16k, load_embedding
 from rvc.train.extract.preparing_files import generate_config, generate_filelist
-from rvc.lib.predictors.RMVPE import RMVPE0Predictor
+from rvc.lib.predictors.f0 import CREPE, FCPE, RMVPE
 from rvc.configs.config import Config
 
 # Load config
@@ -27,52 +27,39 @@ mp.set_start_method("spawn", force=True)
 
 
 class FeatureInput:
-    def __init__(self, sample_rate=16000, hop_size=160, device="cpu"):
-        self.fs = sample_rate
-        self.hop = hop_size
+    def __init__(self, f0_method="rmvpe", device="cpu"):
+        self.hop_size = 160  # default
+        self.sample_rate = 16000  # default
         self.f0_bin = 256
         self.f0_max = 1100.0
         self.f0_min = 50.0
         self.f0_mel_min = 1127 * np.log(1 + self.f0_min / 700)
         self.f0_mel_max = 1127 * np.log(1 + self.f0_max / 700)
         self.device = device
-        self.model_rmvpe = None
-
-    def compute_f0(self, audio_array, method, hop_length):
-        if method == "crepe":
-            return self._get_crepe(audio_array, hop_length, type="full")
-        elif method == "crepe-tiny":
-            return self._get_crepe(audio_array, hop_length, type="tiny")
-        elif method == "rmvpe":
-            return self.model_rmvpe.infer_from_audio(audio_array, thred=0.03)
-        elif method == "fcpe":
-            return self.model_fcpe.compute_f0(audio_array)
-
-    def _get_crepe(self, x, hop_length, type):
-        audio = torch.from_numpy(x.astype(np.float32)).to(self.device)
-        audio /= torch.quantile(torch.abs(audio), 0.999)
-        audio = audio.unsqueeze(0)
-        pitch = torchcrepe.predict(
-            audio,
-            self.fs,
-            hop_length,
-            self.f0_min,
-            self.f0_max,
-            type,
-            batch_size=hop_length * 2,
-            device=audio.device,
-            pad=True,
-        )
-        source = pitch.squeeze(0).cpu().float().numpy()
-        source[source < 0.001] = np.nan
-        return np.nan_to_num(
-            np.interp(
-                np.arange(0, len(source) * (x.size // self.hop), len(source))
-                / (x.size // self.hop),
-                np.arange(0, len(source)),
-                source,
+        if f0_method in ("crepe", "crepe-tiny"):
+            self.model = CREPE(
+                device=self.device, sample_rate=self.sample_rate, hop_size=self.hop_size
             )
-        )
+        elif f0_method == "rmvpe":
+            self.model = RMVPE(
+                device=self.device, sample_rate=self.sample_rate, hop_size=self.hop_size
+            )
+        elif f0_method == "fcpe":
+            self.model = FCPE(
+                device=self.device, sample_rate=self.sample_rate, hop_size=self.hop_size
+            )
+        self.f0_method = f0_method
+
+    def compute_f0(self, x, p_len=None):
+        if self.f0_method == "crepe":
+            f0 = self.model.get_f0(x, self.f0_min, self.f0_max, p_len, "full")
+        elif self.f0_method == "crepe-tiny":
+            f0 = self.model.get_f0(x, self.f0_min, self.f0_max, p_len, "tiny")
+        elif self.f0_method == "rmvpe":
+            f0 = self.model.get_f0(x, filter_radius=0.03)
+        elif self.f0_method == "fcpe":
+            f0 = self.model.get_f0(x, p_len, filter_radius=0.006)
+        return f0
 
     def coarse_f0(self, f0):
         f0_mel = 1127.0 * np.log(1.0 + f0 / 700.0)
@@ -86,14 +73,14 @@ class FeatureInput:
         )
         return np.rint(f0_mel).astype(int)
 
-    def process_file(self, file_info, f0_method, hop_length):
+    def process_file(self, file_info):
         inp_path, opt_path_coarse, opt_path_full, _ = file_info
         if os.path.exists(opt_path_coarse) and os.path.exists(opt_path_full):
             return
 
         try:
-            np_arr = load_audio(inp_path, self.fs)
-            feature_pit = self.compute_f0(np_arr, f0_method, hop_length)
+            np_arr = load_audio_16k(inp_path)
+            feature_pit = self.compute_f0(np_arr)
             np.save(opt_path_full, feature_pit, allow_pickle=False)
             coarse_pit = self.coarse_f0(feature_pit)
             np.save(opt_path_coarse, coarse_pit, allow_pickle=False)
@@ -102,51 +89,29 @@ class FeatureInput:
                 f"An error occurred extracting file {inp_path} on {self.device}: {error}"
             )
 
-    def process_files(self, files, f0_method, hop_length, device, threads):
-        self.device = device
-        if f0_method == "rmvpe":
-            #print(f"[DEBUG - EXTRACT]  Initializing RMVPE0Predictor with hop_length: {hop_length}")
-            self.model_rmvpe = RMVPE0Predictor(
-                os.path.join("rvc", "models", "predictors", "rmvpe.pt"),
-                device=device,
-                #hop_size=hop_length,
-            )
-        elif f0_method == "fcpe":
-            if not hasattr(self, "model_fcpe"):
-                from rvc.lib.predictors.fcpe import FCPE
 
-                self.model_fcpe = FCPE(
-                    hop_length = self.hop,
-                    f0_min = int(self.f0_min),
-                    f0_max = int(self.f0_max),
-                    sampling_rate = self.fs,
-                    device = self.device,
-                    model_path = os.path.join("rvc", "models", "predictors", "fcpe.pt"),
-                )
-        def worker(file_info):
-            self.process_file(file_info, f0_method, hop_length)
+def process_files(files, f0_method, device, threads):
+    fe = FeatureInput(f0_method=f0_method, device=device)
 
-        with tqdm.tqdm(total=len(files), leave=True) as pbar:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
-                futures = [executor.submit(worker, f) for f in files]
-                for _ in concurrent.futures.as_completed(futures):
-                    pbar.update(1)
+    with tqdm.tqdm(total=len(files), leave=True) as pbar:
+        for file_info in files:
+            fe.process_file(file_info)
+            pbar.update(1)
 
 
-def run_pitch_extraction(files, devices, f0_method, hop_length, threads):
+def run_pitch_extraction(files, devices, f0_method, threads):
     devices_str = ", ".join(devices)
     print(
         f"Starting pitch extraction with {num_processes} cores on {devices_str} using {f0_method}..."
     )
     start_time = time.time()
-    fe = FeatureInput()
+
     with concurrent.futures.ProcessPoolExecutor(max_workers=len(devices)) as executor:
         tasks = [
             executor.submit(
-                fe.process_files,
+                process_files,
                 files[i :: len(devices)],
                 f0_method,
-                hop_length,
                 devices[i],
                 threads // len(devices),
             )
@@ -168,7 +133,7 @@ def process_file_embedding(
         wav_file_path, _, _, out_file_path = file_info
         if os.path.exists(out_file_path):
             return
-        feats = torch.from_numpy(load_audio(wav_file_path, 16000)).to(device).float()
+        feats = torch.from_numpy(load_audio_16k(wav_file_path)).to(device).float()
         feats = feats.view(1, -1)
         with torch.no_grad():
             result = model(feats)["last_hidden_state"]
@@ -214,14 +179,13 @@ def run_embedding_extraction(
 if __name__ == "__main__":
     exp_dir = sys.argv[1]
     f0_method = sys.argv[2]
-    hop_length = int(sys.argv[3])
-    num_processes = int(sys.argv[4])
-    gpus = sys.argv[5]
-    sample_rate = sys.argv[6]
-    vocoder_arch = sys.argv[7]
-    embedder_model = sys.argv[8]
-    embedder_model_custom = sys.argv[9] if len(sys.argv) > 9 else None
-    include_mutes = int(sys.argv[10]) if len(sys.argv) > 10 else 2
+    num_processes = int(sys.argv[3])
+    gpus = sys.argv[4]
+    sample_rate = sys.argv[5]
+    vocoder_arch = sys.argv[6]
+    embedder_model = sys.argv[7]
+    embedder_model_custom = sys.argv[8] if len(sys.argv) > 8 else None
+    include_mutes = int(sys.argv[9]) if len(sys.argv) > 9 else 2
 
     wav_path = os.path.join(exp_dir, "sliced_audios_16k")
     os.makedirs(os.path.join(exp_dir, "f0"), exist_ok=True)
@@ -248,15 +212,13 @@ if __name__ == "__main__":
             file,
             os.path.join(exp_dir, "f0", file_name + ".npy"),
             os.path.join(exp_dir, "f0_voiced", file_name + ".npy"),
-            os.path.join(
-                exp_dir, "extracted", file_name.replace("wav", "npy")
-            ),
+            os.path.join(exp_dir, "extracted", file_name.replace("wav", "npy")),
         ]
         files.append(file_info)
 
     devices = ["cpu"] if gpus == "-" else [f"cuda:{idx}" for idx in gpus.split("-")]
 
-    run_pitch_extraction(files, devices, f0_method, hop_length, num_processes)
+    run_pitch_extraction(files, devices, f0_method, num_processes)
 
     run_embedding_extraction(
         files, devices, embedder_model, embedder_model_custom, num_processes

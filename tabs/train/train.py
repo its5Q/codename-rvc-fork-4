@@ -1,4 +1,8 @@
 import os
+import signal
+
+process_pids = []
+
 import shutil
 import sys
 from multiprocessing import cpu_count
@@ -11,6 +15,7 @@ from core import (
     run_preprocess_script,
     run_prerequisites_script,
     run_train_script,
+    stop_train_script,
 )
 from rvc.configs.config import get_gpu_info, get_number_of_gpus, max_vram_gpu
 from rvc.lib.utils import format_title
@@ -514,16 +519,6 @@ def train_tab():
             value=True,
             interactive=True,
         )
-        hop_length = gr.Slider(
-            1,
-            480,
-            160,
-            step=1,
-            label="Hop Length",
-            info="Kept for legacy purposes. Ideally shouldn't be set to anything else than 160 as the rest of f0 methods. )",
-            visible=False,
-            interactive=True,
-        )
         with gr.Row(visible=False) as embedder_custom:
             with gr.Accordion("Custom Embedder", open=True):
                 with gr.Row():
@@ -557,7 +552,6 @@ def train_tab():
             inputs=[
                 model_name,
                 f0_method,
-                hop_length,
                 cpu_cores,
                 gpu,
                 sampling_rate,
@@ -574,7 +568,7 @@ def train_tab():
         with gr.Row():
             batch_size = gr.Slider(
                 1,
-                50,
+                128,
                 max_vram_gpu(0),
                 step=1,
                 label="Batch Size",
@@ -852,11 +846,11 @@ def train_tab():
                 outputs=[train_output_info],
             )
 
-            stop_train_button = gr.Button("Stop Training", visible=False)
+            stop_train_button = gr.Button("Stop Training", visible=True)
             stop_train_button.click(
-                fn=stop_train,
-                inputs=[model_name],
-                outputs=[],
+                fn=stop_train_script,
+                inputs=[],
+                outputs=[train_output_info],
             )
 
             index_button = gr.Button("Generate Index")
@@ -917,11 +911,6 @@ def train_tab():
             def toggle_visible(checkbox):
                 return {"visible": checkbox, "__type__": "update"}
 
-            def toggle_visible_hop_length(f0_method):
-                if f0_method == "crepe" or f0_method == "crepe-tiny":
-                    return {"visible": False, "__type__": "update"}
-                return {"visible": False, "__type__": "update"}
-
             def toggle_visible_gamma(lr_scheduler):
                 if lr_scheduler == "exp decay":
                     return {"visible": True, "__type__": "update"}
@@ -938,18 +927,6 @@ def train_tab():
                         "visible": pretrained,
                         "__type__": "update",
                     }
-
-            def enable_stop_train_button():
-                return {"visible": False, "__type__": "update"}, {
-                    "visible": True,
-                    "__type__": "update",
-                }
-
-            def disable_stop_train_button():
-                return {"visible": True, "__type__": "update"}, {
-                    "visible": False,
-                    "__type__": "update",
-                }
 
             def download_prerequisites():
                     gr.Info(
@@ -1046,11 +1023,6 @@ def train_tab():
                 inputs=[upload_audio_dataset, dataset_name],
                 outputs=[upload_audio_dataset, dataset_path],
             )
-            f0_method.change(
-                fn=toggle_visible_hop_length,
-                inputs=[f0_method],
-                outputs=[hop_length],
-            )
             embedder_model.change(
                 fn=toggle_visible_embedder_custom,
                 inputs=[embedder_model],
@@ -1108,16 +1080,6 @@ def train_tab():
                 fn=toggle_visible,
                 inputs=[multiple_gpu],
                 outputs=[gpu_custom_settings],
-            )
-            train_button.click(
-                fn=enable_stop_train_button,
-                inputs=[],
-                outputs=[train_button, stop_train_button],
-            )
-            train_output_info.change(
-                fn=disable_stop_train_button,
-                inputs=[],
-                outputs=[train_button, stop_train_button],
             )
             pth_dropdown_export.change(
                 fn=export_pth,

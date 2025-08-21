@@ -42,6 +42,7 @@ import torch.multiprocessing as mp
 
 now_dir = os.getcwd()
 sys.path.append(os.path.join(now_dir))
+pid_data = {"process_pids": []}
 
 # Zluda hijack
 import rvc.lib.zluda
@@ -146,14 +147,14 @@ torch.backends.cudnn.deterministic = use_deterministic
 
 # Globals ( tweakable )
 
-randomized = True
-benchmark_mode = False
+randomized = False
+benchmark_mode = True
 enable_persistent_workers = True
 debug_shapes = False
 
 # EXPERIMENTAL
 c_stft = 21.0 # 18.0
-
+use_mrd_med = True
 
 import logging
 logging.getLogger("torch").setLevel(logging.ERROR)
@@ -357,47 +358,35 @@ def main():
         Starts the training process with multi-GPU support or CPU.
         """
         children = []
-        pid_data = {"process_pids": []}
-        with open(config_save_path, "r") as pid_file:
-            try:
-                existing_data = json.load(pid_file)
-                pid_data.update(existing_data)
-            except json.JSONDecodeError:
-                pass
-        with open(config_save_path, "w") as pid_file:
-            for rank, device_id in enumerate(gpus):
-                subproc = mp.Process(
-                    target=run,
-                    args=(
-                        rank,
-                        n_gpus,
-                        experiment_dir,
-                        pretrainG,
-                        pretrainD,
-                        total_epoch,
-                        save_every_weights,
-                        config,
-                        device,
-                        device_id,
-                    ),
-                )
-                children.append(subproc)
-                subproc.start()
-                pid_data["process_pids"].append(subproc.pid)
-            json.dump(pid_data, pid_file, indent=4)
+
+        for rank, device_id in enumerate(gpus):
+            subproc = mp.Process(
+                target=run,
+                args=(
+                    rank,
+                    n_gpus,
+                    experiment_dir,
+                    pretrainG,
+                    pretrainD,
+                    total_epoch,
+                    save_every_weights,
+                    config,
+                    device,
+                    device_id,
+                ),
+            )
+            children.append(subproc)
+            subproc.start()
+            pid_data["process_pids"].append(subproc.pid)
 
         for i in range(n_gpus):
             children[i].join()
-
-
 
     if cleanup:
         print("Removing files from the previous training attempt...")
 
         # Clean up unnecessary files
-        for root, dirs, files in os.walk(
-            os.path.join(now_dir, "logs", model_name), topdown=False
-        ):
+        for root, dirs, files in os.walk(os.path.join(now_dir, "logs", model_name), topdown=False):
             for name in files:
                 file_path = os.path.join(root, name)
                 file_name, file_extension = os.path.splitext(name)
@@ -612,6 +601,11 @@ def run(
         # MPD + MSD + MRD
         from rvc.lib.algorithm.discriminators.multi.mpd_msd_mrd_combined import MPD_MSD_MRD_Combined
         net_d = MPD_MSD_MRD_Combined(config.model.use_spectral_norm, use_checkpointing=use_checkpointing, **dict(config.mrd))
+
+#        # MRD
+#        from rvc.lib.algorithm.discriminators.single.mrd_discriminator import MultiResolutionDiscriminator
+#        net_d = MultiResolutionDiscriminator(**dict(config.mrd))
+        
     else:
         # MultiPeriodDiscriminator + MultiScaleDiscriminator ( unified )
         from rvc.lib.algorithm.discriminators.multi.mpd_msd_discriminators import MultiPeriod_MultiScale_Discriminator
@@ -1435,17 +1429,8 @@ def training_loop(
                         architecture=architecture,
                     )
         if done:
-            # Clean-up process IDs from config.json
-            pid_file_path = os.path.join(experiment_dir, "config.json")
-            with open(pid_file_path, "r") as pid_file:
-                try:
-                    pid_data = json.load(pid_file)
-                except json.JSONDecodeError:
-                    pid_data = {}
-
-            with open(pid_file_path, "w") as pid_file:
-                pid_data.pop("process_pids", None)
-                json.dump(pid_data, pid_file, indent=4)
+            # Clean-up process IDs from memory
+            pid_data["process_pids"].clear()  # Clear the PID list when done
 
             if rank == 0:
                 writer.flush()

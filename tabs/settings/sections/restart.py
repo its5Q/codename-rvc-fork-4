@@ -5,22 +5,6 @@ import json
 
 now_dir = os.getcwd()
 
-
-def stop_train(model_name: str):
-    pid_file_path = os.path.join(now_dir, "logs", model_name, "config.json")
-    try:
-        with open(pid_file_path, "r") as pid_file:
-            pid_data = json.load(pid_file)
-            pids = pid_data.get("process_pids", [])
-        with open(pid_file_path, "w") as pid_file:
-            pid_data.pop("process_pids", None)
-            json.dump(pid_data, pid_file, indent=4)
-        for pid in pids:
-            os.kill(pid, 9)
-    except:
-        pass
-
-
 def stop_infer():
     pid_file_path = os.path.join(now_dir, "assets", "infer_pid.txt")
     try:

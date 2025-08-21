@@ -1,10 +1,18 @@
+import psutil
 import os
 import sys
 import json
 import argparse
+
+import platform
 import subprocess
+#import signal
+#import multiprocessing
+
+
 from functools import lru_cache
 from distutils.util import strtobool
+
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -20,7 +28,7 @@ from rvc.lib.tools.launch_tensorboard import launch_tensorboard_pipeline
 from rvc.lib.tools.model_download import model_download_pipeline
 
 python = sys.executable
-
+training_process = None
 
 # Get TTS Voices -> https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=6A5AA1D4EAFF4E9FB37E23D68491D6F4
 @lru_cache(maxsize=1)  # Cache only one result since the file is static
@@ -56,7 +64,6 @@ def run_infer_script(
     index_rate: float,
     volume_envelope: int,
     protect: float,
-    hop_length: int,
     f0_method: str,
     input_path: str,
     output_path: str,
@@ -123,7 +130,6 @@ def run_infer_script(
         "index_rate": index_rate,
         "volume_envelope": volume_envelope,
         "protect": protect,
-        "hop_length": hop_length,
         "f0_method": f0_method,
         "pth_path": pth_path,
         "index_path": index_path,
@@ -194,7 +200,6 @@ def run_batch_infer_script(
     index_rate: float,
     volume_envelope: int,
     protect: float,
-    hop_length: int,
     f0_method: str,
     input_folder: str,
     output_folder: str,
@@ -261,7 +266,6 @@ def run_batch_infer_script(
         "index_rate": index_rate,
         "volume_envelope": volume_envelope,
         "protect": protect,
-        "hop_length": hop_length,
         "f0_method": f0_method,
         "pth_path": pth_path,
         "index_path": index_path,
@@ -335,7 +339,6 @@ def run_tts_script(
     index_rate: float,
     volume_envelope: int,
     protect: float,
-    hop_length: int,
     f0_method: str,
     output_tts_path: str,
     output_rvc_path: str,
@@ -380,7 +383,6 @@ def run_tts_script(
         index_rate=index_rate,
         volume_envelope=volume_envelope,
         protect=protect,
-        hop_length=hop_length,
         f0_method=f0_method,
         audio_input_path=output_tts_path,
         audio_output_path=output_rvc_path,
@@ -462,7 +464,6 @@ def run_preprocess_script(
 def run_extract_script(
     model_name: str,
     f0_method: str,
-    hop_length: int,
     cpu_cores: int,
     gpu: int,
     sample_rate: int,
@@ -483,7 +484,6 @@ def run_extract_script(
             [
                 model_path,
                 f0_method,
-                hop_length,
                 cpu_cores,
                 gpu,
                 sample_rate,
@@ -536,6 +536,7 @@ def run_train_script(
     custom_lr_d: float = 1e-4,
     
 ):
+    global training_process
 
     if pretrained == True:
         from rvc.lib.tools.pretrained_selector import pretrained_selector
@@ -592,9 +593,62 @@ def run_train_script(
             ],
         ),
     ]
-    subprocess.run(command)
-    # run_index_script(model_name, rvc_version, index_algorithm)
-    return f"Model {model_name} trained successfully."
+    if platform.system() == "Windows":
+        global training_process
+        training_process = subprocess.Popen(
+            command,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        training_process = subprocess.Popen(
+            command,
+            preexec_fn=os.setsid
+        )
+
+    training_process.wait()
+    return f"Training has been successfully completed or stopped."
+
+
+# Stopping the training
+def stop_train_script():
+    global training_process
+    if training_process and training_process.poll() is None:
+        try:
+        # Get the parent process
+            pid = training_process.pid
+            parent_process = psutil.Process(pid)
+        # Since we use 'mp.spawn' we need to get all worker processes
+            worker_pids = []
+            for child in parent_process.children(recursive=True):
+                worker_pids.append(child.pid)
+        # Terminate all child processes / workers spawned by mp.spawn or DDP
+            for pid in worker_pids:
+                worker_process = psutil.Process(pid)
+                worker_process.terminate()
+                print(f"[TRAINING] Terminated child worker process PID: {pid}")
+
+        # Now terminate the main (parent) training process
+            parent_process.terminate()
+            print(f"[TRAINING] Terminated parent process PID: {pid}")
+            
+            return ""
+
+        except psutil.NoSuchProcess as e:
+            print(f"No such process: {e}")
+            return "No running process found."
+        except psutil.AccessDenied as e:
+            print(f"Permission denied: {e}")
+            return "Failed to terminate process due to permission issues."
+        except Exception as e:
+            print(f"Error while stopping process: {e}")
+            return f"Error stopping process: {e}"
+    else:
+    # Emergency-Nuke if everything else failed.
+        if platform.system() == "Windows":
+            subprocess.run(["taskkill", "/F", "/T", "/IM", "python.exe"])
+        else:
+            subprocess.run(["pkill", "-f", "rvc/train/train.py"])
+        return "Emergency-Nuke issued."
 
 
 # Index
@@ -714,14 +768,6 @@ def parse_arguments():
         help=protect_description,
         choices=[i / 1000.0 for i in range(0, 501)],
         default=0.33,
-    )
-    hop_length_description = "Only applicable for the Crepe pitch extraction method. Determines the time it takes for the system to react to a significant pitch change. Smaller values require more processing time but can lead to better pitch accuracy."
-    infer_parser.add_argument(
-        "--hop_length",
-        type=int,
-        help=hop_length_description,
-        choices=range(1, 513),
-        default=128,
     )
     f0_method_description = "Choose the pitch extraction algorithm for the conversion. 'rmvpe' is the default and generally recommended."
     infer_parser.add_argument(
@@ -1245,13 +1291,6 @@ def parse_arguments():
         default=0.33,
     )
     batch_infer_parser.add_argument(
-        "--hop_length",
-        type=int,
-        help=hop_length_description,
-        choices=range(1, 513),
-        default=128,
-    )
-    batch_infer_parser.add_argument(
         "--f0_method",
         type=str,
         help=f0_method_description,
@@ -1733,13 +1772,6 @@ def parse_arguments():
         default=0.33,
     )
     tts_parser.add_argument(
-        "--hop_length",
-        type=int,
-        help=hop_length_description,
-        choices=range(1, 513),
-        default=128,
-    )
-    tts_parser.add_argument(
         "--f0_method",
         type=str,
         help=f0_method_description,
@@ -1914,7 +1946,7 @@ def parse_arguments():
         required=False,
     )
     preprocess_parser.add_argument(
-        "--norm_mode",
+        "--normalization_mode",
         type=str,
         help="Normalization mode.",
         choices=["none", "pre", "post"],
@@ -1940,13 +1972,6 @@ def parse_arguments():
             "fcpe",
         ],
         default="rmvpe",
-    )
-    extract_parser.add_argument(
-        "--hop_length",
-        type=int,
-        help="Hop length for feature extraction. Only applicable for Crepe pitch extraction.",
-        choices=range(1, 513),
-        default=128,
     )
     extract_parser.add_argument(
         "--cpu_cores",
@@ -2351,7 +2376,6 @@ def main():
                 index_rate=args.index_rate,
                 volume_envelope=args.volume_envelope,
                 protect=args.protect,
-                hop_length=args.hop_length,
                 f0_method=args.f0_method,
                 input_path=args.input_path,
                 output_path=args.output_path,
@@ -2414,7 +2438,6 @@ def main():
                 index_rate=args.index_rate,
                 volume_envelope=args.volume_envelope,
                 protect=args.protect,
-                hop_length=args.hop_length,
                 f0_method=args.f0_method,
                 input_folder=args.input_folder,
                 output_folder=args.output_folder,
@@ -2481,7 +2504,6 @@ def main():
                 index_rate=args.index_rate,
                 volume_envelope=args.volume_envelope,
                 protect=args.protect,
-                hop_length=args.hop_length,
                 f0_method=args.f0_method,
                 output_tts_path=args.output_tts_path,
                 output_rvc_path=args.output_rvc_path,
@@ -2515,7 +2537,6 @@ def main():
             run_extract_script(
                 model_name=args.model_name,
                 f0_method=args.f0_method,
-                hop_length=args.hop_length,
                 cpu_cores=args.cpu_cores,
                 gpu=args.gpu,
                 sample_rate=args.sample_rate,

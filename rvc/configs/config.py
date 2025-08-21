@@ -34,10 +34,10 @@ class Config:
         
         if self.device == "cpu":
             self.is_half = False
-            print("[Config] Running on CPU, forcing fp32 precision.")
+            print("[CONFIG] Running on CPU, forcing fp32 precision.")
         else:
             self.is_half = initial_precision == "bf16"
-            print(f"[Config] Running on CUDA, training-only precision loaded from config: {initial_precision}")
+            print(f"[CONFIG] Running on CUDA, training-only precision loaded from config: {initial_precision}")
         self.gpu_name = (
             torch.cuda.get_device_name(int(self.device.split(":")[-1]))
             if self.device.startswith("cuda")
@@ -73,6 +73,18 @@ class Config:
                     json.dump(config, f, indent=4)
             except FileNotFoundError:
                 print(f"File not found: {full_config_path}")
+
+        for config_path in arch_config_paths["ringformer"]:
+            full_config_path = os.path.join("rvc", "configs", config_path)
+            try:
+                with open(full_config_path, "r") as f:
+                    config = json.load(f)
+                config["train"]["bf16_run"] = bf16_run_value
+                with open(full_config_path, "w") as f:
+                    json.dump(config, f, indent=4)
+            except FileNotFoundError:
+                print(f"File not found: {full_config_path}")
+
         return f"Precision set to: {precision}."
 
     def get_precision(self):
@@ -98,20 +110,21 @@ class Config:
         try:
             with open(full_config_path, "r") as f:
                 config = json.load(f)
+
             bf16_run_value = config["train"].get("bf16_run", False)
             precision = "bf16" if bf16_run_value else "fp32"
             runtime_precision = "bf16" if self.is_half else "fp32"
-            return {
-                "config_precision": precision,
-                "runtime_precision": runtime_precision,
-                "is_half_flag": self.is_half
-            }
+
+            result = (
+                f"Config File Precision: {precision}\n"
+                f"Runtime Precision: {runtime_precision}\n"
+                f"'is_half' Flag: {self.is_half}"
+            )
+            return result
         except FileNotFoundError:
             print(f"File not found: {full_config_path}")
-            return None
+            return "Configuration file not found."
 
-
-            
     def device_config(self):
         if self.device.startswith("cuda"):
             self.set_cuda_config()
@@ -143,8 +156,9 @@ class Config:
             and "V100" not in self.gpu_name.upper()
         ):
             if self.is_half:
-                print(f"[Config Warning] Your GPU ({self.gpu_name}) does NOT support bf16 precision.")
-                print("[Config] Forcing precision to fp32.")
+                print(f"[CONFIG WARNING] Your GPU ({self.gpu_name}) does NOT support bf16 precision.")
+                print(f"[CONFIG WARNING] Your GPU ({self.gpu_name}) does NOT support RingFormer architecture.")
+                print("[CONFIG] Forcing precision to fp32.")
             self.is_half = False
             self.set_precision("fp32")
 
