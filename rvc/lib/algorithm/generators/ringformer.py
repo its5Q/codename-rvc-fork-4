@@ -294,7 +294,7 @@ class RingFormerGenerator(torch.nn.Module):
             - ResBlock_Snake_Fused:  'ResBlock1' I modified by adding in Snake activation with triton fused kernel ( Forward, Backward ) ; https://github.com/falkaer/pytorch-snake
             - ResBlock_SnakeBeta: 'ResBlock1' which is using Snake-Beta instead of Snake. Has learnable both alphas and betas ; https://github.com/NVIDIA/BigVGAN/blob/main/activations.py
         '''
-        ResBlock_Type = ResBlock_SnakeBeta # ResBlock_Snake_Fused
+        ResBlock_Type = ResBlock_Snake_Fused # ResBlock_SnakeBeta
 
         self.m_source = SourceModuleHnNSF(
             sample_rate=sr,

@@ -1489,33 +1489,6 @@ def inference_tab():
                     interactive=True,
                     visible=False,
                 )
-                with gr.Accordion("Preset Settings", open=False):
-                    with gr.Row():
-                        preset_dropdown = gr.Dropdown(
-                            label="Select Custom Preset",
-                            interactive=True,
-                        )
-                        presets_batch_refresh_button = gr.Button("Refresh Presets")
-                    import_file = gr.File(
-                        label="Select file to import",
-                        file_count="single",
-                        type="filepath",
-                        interactive=True,
-                    )
-                    import_file.change(
-                        import_presets_button,
-                        inputs=import_file,
-                        outputs=[preset_dropdown],
-                    )
-                    presets_batch_refresh_button.click(
-                        refresh_presets, outputs=preset_dropdown
-                    )
-                    with gr.Row():
-                        preset_name_input = gr.Textbox(
-                            label="Preset Name",
-                            placeholder="Enter preset name",
-                        )
-                        export_button = gr.Button("Export Preset")
                 pitch_batch = gr.Slider(
                     minimum=-24,
                     maximum=24,

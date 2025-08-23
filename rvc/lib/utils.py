@@ -2,12 +2,14 @@ import os
 import sys
 import soxr
 import librosa
+import ffmpeg
 import soundfile as sf
 import numpy as np
 import re
 import unicodedata
 import wget
 from torch import nn
+import pyloudnorm as pyln
 
 import logging
 from transformers import HubertModel
@@ -34,6 +36,35 @@ class HubertModelWithFinalProj(HubertModel):
         self.final_proj = nn.Linear(config.hidden_size, config.classifier_proj_size)
 
 
+
+def loudness_normalize_audio(audio: np.ndarray, sample_rate: int, target_lufs: float = -23.0) -> np.ndarray:
+    """
+    Normalizes the perceived loudness of an audio signal to a target LUFS value.
+
+    Args:
+        audio (np.ndarray): The input audio signal as a NumPy array (np.float32).
+        sample_rate (int): The sample rate of the audio.
+        target_lufs (float): The desired loudness level in LUFS.
+
+    Returns:
+        np.ndarray: The loudness-normalized audio signal.
+    """
+    try:
+        meter = pyln.Meter(sample_rate, block_size=0.200) # True Peak Meter with 200ms blocks
+        loudness = meter.integrated_loudness(audio)
+        normalized_audio = pyln.normalize.loudness(audio, loudness, target_lufs)
+
+        # Safety for wrong LUFS
+        if np.abs(normalized_audio).max() > 1.0:
+            return None
+
+        return normalized_audio.astype(np.float32)
+    except Exception as e:
+        print(f"Loudness normalization failed: {e}")
+        return audio
+
+
+
 def load_audio_16k(file):
     # this is used by f0 and feature extractions that load preprocessed 16k files, so there's no need to resample - Noobies
     try:
@@ -58,6 +89,69 @@ def load_audio(file, sample_rate):
         raise RuntimeError(f"An error occurred loading the audio: {error}")
 
     return audio.flatten()
+
+
+def load_audio_ffmpeg(
+    source: [str, np.ndarray],
+    sample_rate: int = 48000,
+    source_sr: int = None,
+) -> np.ndarray:
+    """
+    Args:
+        source (str | np.ndarray): The path to the audio file or an in-memory audio chunk.
+        sample_rate (int): The target sample rate to resample the audio to.
+        source_sr (int): The sample rate of the input source. Required for in-memory audio.
+
+    Returns:
+        np.ndarray: A NumPy array containing the audio waveform as 32-bit floats.
+    """
+    if isinstance(source, str):
+        # Handle file path
+        source = source.strip(" ").strip('"').strip("\n").strip('"').strip(" ")
+        if not os.path.exists(source):
+            raise FileNotFoundError(f"The audio file was not found at the provided path: {source}")
+
+        try:
+            out, err = (
+                ffmpeg.input(source, threads=0)
+                .output("-", format="f32le", acodec="pcm_f32le", ac=1, ar=sample_rate)
+                .run(cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
+            )
+        except ffmpeg.Error as e:
+            print(e.stderr.decode())  # Print FFmpeg's error output for debugging
+            raise RuntimeError(f"Failed to load audio file '{source}':\n{e.stderr.decode()}") from e
+        except Exception as e:
+            raise RuntimeError(f"An unexpected error occurred while loading audio: {e}") from e
+    elif isinstance(source, np.ndarray):
+        # Handle in-memory audio chunk
+        if source_sr is None:
+            raise ValueError("source_sr must be provided when passing a NumPy array.")
+        
+        # Ensure the array is a 32-bit float and mono
+        if source.dtype != np.float32:
+            source = source.astype(np.float32)
+
+        if source.ndim > 1:
+            # If stereo, convert to mono
+            source = np.mean(source, axis=1)
+
+        try:
+            process = (
+                ffmpeg
+                .input('pipe:0', format='f32le', acodec='pcm_f32le', ar=source_sr, ac=1)
+                .output('pipe:1', format='f32le', acodec='pcm_f32le', ar=sample_rate)
+                .run_async(pipe_stdin=True, pipe_stdout=True, quiet=True)
+            )
+            out, err = process.communicate(input=source.tobytes())
+        except ffmpeg.Error as e:
+            print(e.stderr.decode()) # Print FFmpeg's error output for debugging
+            raise RuntimeError(f"Failed to resample audio chunk:\n{e.stderr.decode()}") from e
+        except Exception as e:
+            raise RuntimeError(f"An unexpected error occurred while processing audio chunk: {e}") from e
+    else:
+        raise ValueError("Invalid source type. Must be a file path (str) or a NumPy array (np.ndarray).")
+
+    return np.frombuffer(out, np.float32).flatten()
 
 
 def load_audio_infer(
@@ -136,7 +230,6 @@ def load_embedding(embedder_model, custom_embedder=None):
         else:
             print(f"Custom embedder not found: {custom_embedder}, using contentvec")
             model_path = embedding_list["contentvec"]
-    # EXPERIMENTAL SPIN EMBEDDER
     elif embedder_model == "spin":
         model_path = embedding_list[embedder_model]
         bin_file = os.path.join(model_path, "pytorch_model.bin")

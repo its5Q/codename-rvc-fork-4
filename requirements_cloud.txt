@@ -18,6 +18,7 @@ stftpitchshift
 flatten-dict==0.4.2
 torch-dct==0.1.6
 auraloss==0.4.0
+pyloudnorm==0.1.1
 pesq
 
 # EXP

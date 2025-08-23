@@ -13,6 +13,7 @@ def precision_tab():
                 label="Precision",
                 info="Select the precision you want to use for training and inference.",
                 choices=[
+                    "fp16",
                     "bf16",
                     "fp32",
                 ],

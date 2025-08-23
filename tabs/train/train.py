@@ -17,7 +17,7 @@ from core import (
     run_train_script,
     stop_train_script,
 )
-from rvc.configs.config import get_gpu_info, get_number_of_gpus, max_vram_gpu
+from rvc.configs.config import get_gpu_info, get_number_of_gpus, max_vram_gpu, microarchitecture_capability_checker, check_if_fp16
 from rvc.lib.utils import format_title
 
 now_dir = os.getcwd()
@@ -68,13 +68,11 @@ def get_pretrained_list(suffix):
 pretraineds_list_d = get_pretrained_list("D")
 pretraineds_list_g = get_pretrained_list("G")
 
-
 def refresh_custom_pretraineds():
     return (
         {"choices": sorted(get_pretrained_list("G")), "__type__": "update"},
         {"choices": sorted(get_pretrained_list("D")), "__type__": "update"},
     )
-
 
 # Dataset Creator
 datasets_path = os.path.join(now_dir, "assets", "datasets")
@@ -84,7 +82,6 @@ if not os.path.exists(datasets_path):
 
 datasets_path_relative = os.path.relpath(datasets_path, now_dir)
 
-
 def get_datasets_list():
     return [
         dirpath
@@ -92,14 +89,12 @@ def get_datasets_list():
         if any(filename.endswith(tuple(sup_audioext)) for filename in filenames)
     ]
 
-
 def refresh_datasets():
     return {"choices": sorted(get_datasets_list()), "__type__": "update"}
 
 
 # Model Names
 models_path = os.path.join(now_dir, "logs")
-
 
 def get_models_list():
     return [
@@ -109,10 +104,8 @@ def get_models_list():
         and all(excluded not in dirpath for excluded in ["zips", "mute", "reference"])
     ]
 
-
 def refresh_models():
     return {"choices": sorted(get_models_list()), "__type__": "update"}
-
 
 # Refresh Models and Datasets
 def refresh_models_and_datasets():
@@ -120,7 +113,6 @@ def refresh_models_and_datasets():
         {"choices": sorted(get_models_list()), "__type__": "update"},
         {"choices": sorted(get_datasets_list()), "__type__": "update"},
     )
-
 
 # Refresh Custom Embedders
 def get_embedder_custom_list():
@@ -130,10 +122,8 @@ def get_embedder_custom_list():
         for dirname in dirnames
     ]
 
-
 def refresh_custom_embedder_list():
     return {"choices": sorted(get_embedder_custom_list()), "__type__": "update"}
-
 
 # Drop Model
 def save_drop_model(dropbox):
@@ -151,7 +141,6 @@ def save_drop_model(dropbox):
             "Click the refresh button to see the pretrained file in the dropdown menu."
         )
     return None
-
 
 # Drop Dataset
 def save_drop_dataset_audio(dropbox, dataset_name):
@@ -180,7 +169,6 @@ def save_drop_dataset_audio(dropbox, dataset_name):
 
             return None, relative_dataset_path
 
-
 # Drop Custom Embedder
 def create_folder_and_move_files(folder_name, bin_file, config_file):
     if not folder_name:
@@ -204,7 +192,6 @@ def create_folder_and_move_files(folder_name, bin_file, config_file):
 
     return f"Files moved to folder {target_folder}"
 
-
 def refresh_embedders_folders():
     custom_embedders = [
         os.path.join(dirpath, dirname)
@@ -212,7 +199,6 @@ def refresh_embedders_folders():
         for dirname in dirnames
     ]
     return custom_embedders
-
 
 # Export
 def get_pth_list():
@@ -223,7 +209,6 @@ def get_pth_list():
         if filename.endswith(".pth")
     ]
 
-
 def get_index_list():
     return [
         os.path.relpath(os.path.join(dirpath, filename), now_dir)
@@ -232,13 +217,11 @@ def get_index_list():
         if filename.endswith(".index") and "trained" not in filename
     ]
 
-
 def refresh_pth_and_index_list():
     return (
         {"choices": sorted(get_pth_list()), "__type__": "update"},
         {"choices": sorted(get_index_list()), "__type__": "update"},
     )
-
 
 # Export Pth and Index Files
 def export_pth(pth_path):
@@ -252,7 +235,6 @@ def export_pth(pth_path):
         print(f"Attempted to export invalid pth path: {pth_path}")
         return None
 
-
 def export_index(index_path):
     allowed_paths = get_index_list()
     normalized_allowed_paths = [os.path.abspath(os.path.join(now_dir, p)) for p in allowed_paths]
@@ -263,7 +245,6 @@ def export_index(index_path):
     else:
         print(f"Attempted to export invalid index path: {index_path}")
         return None
-
 
 # Upload to Google Drive
 def upload_to_google_drive(pth_path, index_path):
@@ -288,6 +269,34 @@ def upload_to_google_drive(pth_path, index_path):
     upload_file(pth_path)
     upload_file(index_path)
 
+# Enable checkpointing for gpus with memory 
+def auto_enable_checkpointing():
+    try:
+        return max_vram_gpu(0) < 6
+    except:
+        return False
+
+# Microarch. dependent features, options, functionalities etc.. Might expand in future.
+fp16_check = None
+
+if microarchitecture_capability_checker():
+    # "Ampere" microarchitecture and higher:
+    initial_optimizer_choices = ["AdamW_BF16", "AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
+    initial_optimizer = "AdamW_BF16"
+    architecture_choices = ["RVC", "Fork/Applio", "Fork"]
+    fp16_check = True
+else:
+    # Below "Ampere" microarchitecture:
+    initial_optimizer_choices = ["AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
+    initial_optimizer = "AdamW"
+    architecture_choices = ["RVC", "Fork/Applio"]
+    fp16_check = True
+
+# FP16 checker
+if fp16_check:
+    if check_if_fp16():
+        initial_optimizer = "AdamW"
+        initial_optimizer_choices = ["AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
 
 # Train Tab
 def train_tab():
@@ -305,8 +314,8 @@ def train_tab():
                 )
                 architecture = gr.Radio(
                     label="Architecture",
-                    info="Choose the model architecture:\n- **RVC (V2)**: Default - OG, Compatible with all clients.\n- **Fork/Applio**: Experimental - Improved vocoders, only for this Fork or Applio.\n- **Fork**: Experimental - RingFormer based arch.",
-                    choices=["RVC", "Fork/Applio", "Fork"],
+                    info="Choose the model architecture:\n- **RVC (V2): Default/OG-Architecture** - Compatible with all clients.\n- **Fork/Applio: OG-Arch's discs + RefineGAN** - Only for this Fork or Applio ( Experimental. )\n- **Fork: RingFormer-Architecture** - Only for this Fork ( Exclusive. )",
+                    choices=architecture_choices,
                     value="RVC",
                     interactive=True,
                     visible=True,
@@ -314,9 +323,9 @@ def train_tab():
                 vocoder_arch = gr.State("hifi_mrf_refine")
                 optimizer = gr.Radio(
                     label="Architecture",
-                    info="Choose an optimizer used in training. \n- **AdamW_BF16**: [DEFAULT] Good and reliable. ( BF16 ver. with error-correction and kahan summation ) \n- **AdamW**: Normal AdamW. ( Use the bf16 variant unless you train in fp32 ) \n- **RAdam**: Rectified Adam. ( Can help with early instability - Most likely slower convergence) \n- **Ranger21**: AdamW + LookAhead and few more extras. ( Most likely unstable ) \n- **DiffGrad**: An optimizer with CNN in mind. ( Probs a good AdamW alternative - For finetuning ) \n- **Prodigy**: A self-tuning optimizer. Set the learning rate to 1.0 (or leave custom LR disabled) and it will adapt it automatically.",
-                    choices=["AdamW_BF16", "AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"],
-                    value="AdamW_BF16",
+                    info="Choose an optimizer used in training:\n- **AdamW_BF16:** Good and reliable. ( BF16 ver. with error-correction and kahan summation ) \n- **AdamW:** Normal AdamW. ( **Use the BF16 version unless you train in FP32-only or FP16** ) \n- **RAdam:** Rectified Adam. ( **Can help** with early instability - **Most likely slower convergence** ) \n- **Ranger21:** AdamW + LookAhead and few more extras. ( **Most likely unstable** ) \n- **DiffGrad:** An optimizer with CNN in mind. ( **Probs** a good AdamW alternative - **For finetuning** ) \n- **Prodigy:** A self-tuning optimizer. Lr will adapt automatically ( **Don't touch the lr** )",
+                    choices=initial_optimizer_choices,
+                    value=initial_optimizer,
                     interactive=True,
                     visible=True,
                 )
@@ -330,8 +339,8 @@ def train_tab():
                 )
                 vocoder = gr.Radio(
                     label="Vocoder",
-                    info="Vocoder for audio synthesis: \n- HiFi-GAN \n Default; Works with all clients incl. mainline RVC \n\n- MRF HiFi-GAN \n Higher fidelity; Compatible only with this fork or Applio \n\n- RefineGAN \n Highest fidelity; Compatible only with this fork or Applio \n\n- RingFormer \n High-fidelity; Hybrid Conformer-based vocoder with ring attention. \n Designed for efficient synthesis of long audio sequences (real-time friendly)",
-                    choices=["HiFi-GAN", "MRF HiFi-GAN", "RefineGAN", "RingFormer"],
+                    info="**Vocoder for audio synthesis:** \n**HiFi-GAN:** \n- **Decent-Quality:ㅤGood ol' NSF-HiFi-GAN - Reliable, but has it's issues. ( RVC's og vocoder )** \n- **COMPATIBILITY:ㅤAll clients incl. Mainline RVC / W-okada etc.** \n\n**RefineGAN:** \n - **High-Quality(?): NSF-HiFi-Gan + ParallelResBlock + AdaIN** \n- **COMPATIBILITY:ㅤThis Fork or Applio ( afaik, no rt-vc clients support it. )** \n\n**RingFormer:** \n- **Highest-Quality:ㅤA hybrid Conformer-Based Vocoder + Snake-Beta act. + RingAttention** \n- **COMPATIBILITY:ㅤThis Fork ( As for rt-vc, 'Vonovox' supports it. )** \n\n **( RingFormer Requires min. RTX 30xx [ At least Ampere microarchitecture ] )** ",
+                    choices=["HiFi-GAN"],
                     value="HiFi-GAN",
                     interactive=False,
                     visible=True,
@@ -348,7 +357,7 @@ def train_tab():
                         min(cpu_count(), 192),
                         step=1,
                         label="CPU Threads",
-                        info="The number of CPU threads used in the extraction process. By default, it is set to the maximum number of threads available on your CPU, which is recommended in most cases.",
+                        info="The number of CPU threads used in the extraction process. \n By default, it is set to the maximum number of threads available on your CPU. \n ( Which is recommended in most cases. )",
                         interactive=True,
                     )
                 with gr.Column():
@@ -396,14 +405,38 @@ def train_tab():
         refresh = gr.Button("Refresh")
 
         with gr.Accordion("Advanced Settings for the preprocessing step", open=True):
-            cut_preprocess = gr.Radio(
-                label="Audio cutting",
-                info="- Audio file slicing method: Select 'Skip' if the files are already pre-sliced and properly processed. \n- 'Simple' If your dataset is already silence-truncated. \n- 'Automatic' for automatic silence detection and slicing around it. \n\n **It is advised to have the dataset properly silence-truncated and to use the 'Simple' method**.",
-                choices=["Skip", "Simple", "Automatic"],
-                value="Simple",
-                interactive=True,
-            )
             with gr.Row():
+                loading_resampling = gr.Radio(
+                    label="Resampling & Loading Handler",
+                    info="- **librosa** - Uses SoX resampler ( VHQ ).\n- **ffmpeg** -  Uses SW resampler ( Windowed Sinc filter with Blackman-Nuttall window ) \n\n **At this given moment unsure which is better for rvc's particular case.** \n **( But I'd probs go with Sinc / FFmpeg. )**",
+                    choices=["librosa", "ffmpeg"],
+                    value="ffmpeg",
+                    interactive=True,
+                    scale=1.45,
+                )
+                normalization_mode = gr.Radio(
+                    label="Loudness Normalization",
+                    info="- **none:** Disabled \n ( Select this if the files are already normalized. ) \n- **pre:** Pre-Normalization \n ( Loudness norm. done on whole samples. )\n- **post:** Post-Normalization \n ( Loudness norm. of each sliced segment. ) \n **( Best one. )**",
+                    choices=["none", "pre", "post"],
+                    value="post",
+                    interactive=True,
+                    visible=True,
+                )
+                target_lufs = gr.Number(
+                    label="Target LUFS",
+                    info="Specify target LUFS for loudness normalization. \n **If unsure what it does, keep it set to -20.0** \n\n **( Viable range to try: -22 <-> -14 )** \n **( PS. If chosen LUFS doesn't fit your set,** \n **the LUFS finder gonna kick in so, don't worry :> )**",
+                    value=-20.0,
+                    interactive=True,
+                    scale=0.9,
+                )
+            with gr.Row():
+                cut_preprocess = gr.Radio(
+                    label="Audio cutting",
+                    info="Audio file slicing-method selection:\n - **Skip** - if the files are already pre-sliced and properly processed. \n- **Simple** - If your dataset is already silence-truncated. \n- **Automatic** - for automatic silence detection and slicing around it. \n\n **It is advised to have the dataset properly silence-truncated and to use the 'Simple' method.** \n **(PS. Automatic is crap ~ I advise against it. )**",
+                    choices=["Skip", "Simple", "Automatic"],
+                    value="Simple",
+                    interactive=True,
+                )
                 chunk_len = gr.Slider(
                     0.5,
                     30.0,
@@ -412,6 +445,7 @@ def train_tab():
                     label="Chunk length (sec)",
                     info="Length of the audio slice for 'Simple' method.",
                     interactive=True,
+                    scale=0.46,
                 )
                 overlap_len = gr.Slider(
                     0.0,
@@ -421,40 +455,33 @@ def train_tab():
                     label="Overlap length (sec)",
                     info="Length of the overlap between slices for 'Simple' method.",
                     interactive=True,
+                    scale=0.57,
                 )
-
-            with gr.Row():
+            with gr.Column():
                 process_effects = gr.Checkbox(
-                    label="DC / Low-hz filtering",
-                    info="Applies high-pass filtering to get rid of low freq. noise and potential dc offset. \n ***Disable this option If you already high-pass filtered your dataset.*** \n",
+                    label="DC / high-pass filtering",
+                    info="**Applies high-pass filtering to get rid of low-freq. noise, DC offset and some Rumble. ( Disable if your dataset is already high-pass filtered. )**",
                     value=True,
                     interactive=True,
                     visible=True,
                 )
-                normalization_mode = gr.Radio(
-                    label="Normalization mode",
-                    info="Audio normalization: \n 'none' - No normalization; Select this if the files are already normalized. \n 'pre' - Pre-Slicing Normalization on whole samples; Done before slicing. \n 'post' - Post-Slicing Normalizatoon - Normalization of each sliced segment. ***( Best one.)***",
-                    choices=["none", "pre", "post"],
-                    value="post",
-                    interactive=True,
-                    visible=True,
-                )
+            with gr.Column():
                 noise_reduction = gr.Checkbox(
                     label="Noise Reduction",
-                    info="'Spectral-Gating' based noise reduction. \n ***Disable it if your dataset is already de-noised or noise-free.***",
+                    info="**Spectral-Gating-Based noise reduction. ( Keep it disabled if your dataset is already Denoised or Noise-Free. )**",
                     value=False,
                     interactive=True,
                     visible=True,
                 )
-            clean_strength = gr.Slider(
-                minimum=0,
-                maximum=1,
-                label="Noise Reduction Strength",
-                info="Set the clean-up level to the audio you want, the more you increase it the more it will clean up, but it is possible that the audio will be more compressed.",
-                visible=False,
-                value=0.5,
-                interactive=True,
-            )
+                clean_strength = gr.Slider(
+                    minimum=0,
+                    maximum=1,
+                    label="Noise Reduction Strength",
+                    info="Set the desired level for clean-up level. Higher values result in more aggressive cleaning, but can negatively impact the audio.",
+                    visible=False,
+                    value=0.5,
+                    interactive=True,
+                )
         preprocess_output_info = gr.Textbox(
             label="Output Information",
             info="The output information will be displayed here.",
@@ -478,7 +505,9 @@ def train_tab():
                     clean_strength,
                     chunk_len,
                     overlap_len,
-                    normalization_mode
+                    normalization_mode,
+                    loading_resampling,
+                    target_lufs,
                 ],
                 outputs=[preprocess_output_info],
             )
@@ -488,7 +517,7 @@ def train_tab():
         with gr.Row():
             f0_method = gr.Radio(
                 label="Pitch extraction algorithm",
-                info="Pitch extraction algorithm to use for the audio conversion: \n\nRMVPE - The default algorithm, recommended for most cases. \n- The fastest, very robust to noise. Can tolerate harmonies / layered vocals to some degree.  \n\nCREPE - Better suited for truly clean audio. \n- Is slower and way worse in handling noise. Can provide different / softer-ish results. \n\nCREPE-TINY - Smaller / lighter variant of CREPE. \n- Performs worse than 'full' ( standard crepe ) but is way lighter on hardware. \n\nFCPE - Fast Context-based Pitch Estimation. \n- Lighter than RMVPE ~ More Real-time friendly. Different behavior for unvoiced elements. \n- Can possibly sound a lil different than RMVPE - Imo not recommended for training.",
+                info="Pitch extraction algorithm to use for the audio conversion: \n\n**RMVPE:** The default algorithm, recommended for most cases. \n- The fastest, very robust to noise. Can tolerate harmonies / layered vocals to some degree.  \n\n**CREPE:** Better suited for truly clean audio. \n- Is slower and way worse in handling noise. Can provide different / softer-ish results. \n\n**CREPE-TINY:** Smaller / lighter variant of CREPE. \n- Performs worse than 'full' ( standard crepe ) but is way lighter on hardware. \n\n**FCPE**: Fast Context-based Pitch Estimation. \n- Lighter than RMVPE ~ More Real-time friendly. Different behavior for unvoiced elements. \n- Can possibly sound a lil different than RMVPE - Imo not recommended for training.",
                 choices=["crepe", "crepe-tiny", "rmvpe", "fcpe"],
                 value="rmvpe",
                 interactive=True,
@@ -496,7 +525,7 @@ def train_tab():
 
             embedder_model = gr.Radio(
                 label="Embedder Model",
-                info="Model used for learning speaker embedding.",
+                info="Model used for learning speaker embedding and features extraction.",
                 choices=[
                     "contentvec",
                     "spin",
@@ -514,7 +543,7 @@ def train_tab():
             2,
             step=1,
             label="Silent ( 'mute' ) files for training.",
-            info="Adding several silent files to the training set enables the model to handle pure silence in inferred audio files. Select '0' ( zero ) if your dataset is clean and already contains segments of pure silence.",
+            info="**Adding several silent files to the training set enables the model to handle pure silence in inferred audio files. Select '0' ( zero ) if your dataset is clean and already contains segments of pure silence.**",
             value=True,
             interactive=True,
         )
@@ -571,7 +600,7 @@ def train_tab():
                 max_vram_gpu(0),
                 step=1,
                 label="Batch Size",
-                info="[ TOO BIG BATCH SIZE CAN LEAD TO VRAM 'OOM' ISSUES. ] \nBigger batch size: \n- Promotes smoother, more stable gradients. \n- Can beneficial in cases where your dataset is big and diverse. \n- Can lead to early overtraining or flat / ' stuck ' graphs. \n- Generalization might be worsened. \n\n Smaller batch size: \n- Promotes noisier, less stable gradients. \n- More suitable when your dataset is small, less diverse or repetitive. \n- Can lead to instability / divergence or noisy as hell graphs. \n- Generalization might be improved.",
+                info="[ TOO BIG BATCH SIZE CAN LEAD TO VRAM 'OOM' ISSUES. ]\n\n Bigger batch size: \n- Promotes smoother, more stable gradients. \n- Can beneficial in cases where your dataset is big and diverse. \n- Can lead to early overtraining or flat / ' stuck ' graphs. \n- Generalization might be worsened. \n\n Smaller batch size: \n- Promotes noisier, less stable gradients. \n- More suitable when your dataset is small, less diverse or repetitive. \n- Can lead to instability / divergence or noisy as hell graphs. \n- Generalization might be improved.",
                 interactive=True,
             )
             save_every_epoch = gr.Slider(
@@ -628,15 +657,15 @@ def train_tab():
                     use_checkpointing = gr.Checkbox(
                         label="Checkpointing",
                         info="Enables memory-efficient training. \n This reduces the vram usage in exchange for slower training speed.",
-                        value=False,
+                        value=auto_enable_checkpointing,
                         interactive=True,
                     )
                 with gr.Column():
                     use_tf32 = gr.Checkbox(
                         label="use 'TF32' precision",
-                        info="Uses TF32 precision instead of FP32, typically resulting in 30% to 100% faster training. \n**Supported only on Ampere GPUs and newer!**",
-                        value=False,
-                        interactive=True,
+                        info="Uses TF32 precision instead of FP32, typically resulting in 30% to 100% faster training. \n**Requires min. RTX 30xx ( At least Ampere microarchitecture )**",
+                        value=microarchitecture_capability_checker(),
+                        interactive=microarchitecture_capability_checker(),
                     )
                     use_benchmark = gr.Checkbox(
                         label="Use 'cuDNN benchmark' mode",
@@ -952,7 +981,7 @@ def train_tab():
                         {
                             "choices": ["32000", "40000", "48000"],
                             "__type__": "update",
-                        }, 
+                        },
                         {
                             "choices": ["HiFi-GAN", "MRF HiFi-GAN", "RefineGAN"],
                             "__type__": "update",
@@ -968,7 +997,7 @@ def train_tab():
                             "choices": ["24000", "32000", "40000", "48000"],
                             "__type__": "update",
                             "value": "48000",
-                        }, 
+                        },
                         {
                             "choices": ["RingFormer"],
                             "__type__": "update",
@@ -986,7 +1015,7 @@ def train_tab():
                             "value": "48000",
                         },
                         {
-                            "choices": ["HiFi-GAN", "MRF HiFi-GAN", "RefineGAN"],
+                            "choices": ["HiFi-GAN"],
                             "__type__": "update",
                             "value": "HiFi-GAN",
                             "interactive": False,
@@ -994,11 +1023,11 @@ def train_tab():
                         vocoder_arch_value,
                     )
 
-            def update_slider_visibility(noise_reduction):
+            def update_noise_reduce_slider_visibility(noise_reduction):
                 return gr.update(visible=noise_reduction)
 
             noise_reduction.change(
-                fn=update_slider_visibility,
+                fn=update_noise_reduce_slider_visibility,
                 inputs=noise_reduction,
                 outputs=clean_strength,
             )

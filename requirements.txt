@@ -18,6 +18,7 @@ stftpitchshift
 flatten-dict==0.4.2
 torch-dct==0.1.6
 auraloss==0.4.0
+pyloudnorm==0.1.1
 pesq @ https://github.com/codename0og/codename-essentials/raw/refs/heads/main/pesq-0.0.5-cp310-cp310-win_amd64.whl; sys_platform == "win32"
 
 # EXP

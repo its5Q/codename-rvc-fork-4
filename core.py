@@ -434,6 +434,8 @@ def run_preprocess_script(
     chunk_len: float,
     overlap_len: float,
     normalization_mode: str = "none",
+    loading_resampling: str = "librosa",
+    target_lufs: float = -20,
 ):
     preprocess_script_path = os.path.join("rvc", "train", "preprocess", "preprocess.py")
     command = [
@@ -453,6 +455,8 @@ def run_preprocess_script(
                 chunk_len,
                 overlap_len,
                 normalization_mode,
+                loading_resampling,
+                target_lufs,
             ],
         ),
     ]
@@ -1902,8 +1906,8 @@ def parse_arguments():
         type=str,
         choices=["Skip", "Simple", "Automatic"],
         help="Cut the dataset into smaller segments for faster preprocessing.",
-        default="Automatic",
-        required=True,
+        default="Simple",
+        required=False,
     )
     preprocess_parser.add_argument(
         "--process_effects",
@@ -1950,10 +1954,24 @@ def parse_arguments():
         type=str,
         help="Normalization mode.",
         choices=["none", "pre", "post"],
-        default="none",
+        default="post",
         required=False,
     )
-
+    preprocess_parser.add_argument(
+        "--loading_resampling",
+        type=str,
+        help="Librosa's using SoXr, FFmpeg's using Windowed Sinc filter with Blackman-Nuttall window.",
+        choices=["librosa", "ffmpeg"],
+        default="librosa",
+        required=True,
+    )
+    preprocess_parser.add_argument(
+        "--target_lufs",
+        type=float,
+        help="Set target LUFS for loudness normalization",
+        default=-20,
+        required=False,
+    )
     # Parser for 'extract' mode
     extract_parser = subparsers.add_parser(
         "extract", help="Extract features from a dataset."
@@ -2532,6 +2550,8 @@ def main():
                 chunk_len=args.chunk_len,
                 overlap_len=args.overlap_len,
                 normalization_mode=args.normalization_mode,
+                loading_resampling=args.loading_resampling,
+                target_lufs=args.target_lufs,
             )
         elif args.mode == "extract":
             run_extract_script(

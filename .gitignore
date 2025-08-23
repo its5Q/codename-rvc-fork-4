@@ -43,3 +43,5 @@ rvc/train/utils - Copy.py
 rvc/train/train - Copy.py
 rvc/train/train - Copy (2) - remap active.py
 EXTRAS/transfer.py
+rvc/configs/config - backup.py
+rvc/train/preprocess/preprocess - LUFS WITHOUT SAFETY.py

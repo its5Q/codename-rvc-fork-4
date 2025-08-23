@@ -131,6 +131,13 @@ except FileNotFoundError:
 
 config.data.training_files = os.path.join(experiment_dir, "filelist.txt")
 
+# AMP precision / dtype init
+if config.train.bf16_run:
+    train_dtype = torch.bfloat16
+elif config.train.fp16_run: 
+    train_dtype = torch.float16
+else:
+    train_dtype = torch.float32
 
 # Globals ( do not touch these. )
 global_step = 0
@@ -239,7 +246,7 @@ def si_sdr(preds, target, eps=1e-8):
     return si_sdr_value.mean()
 
 # Mel spectrogram torch helper ( waveform -> spec -> mel spec ):
-def wave_to_mel (waveform):
+def wave_to_mel(waveform, half):
     mel_spec = mel_spectrogram_torch(
         waveform.float().squeeze(1),
         config.data.filter_length,
@@ -250,6 +257,10 @@ def wave_to_mel (waveform):
         config.data.mel_fmin,
         config.data.mel_fmax,
     )
+    if half == torch.float16:
+        mel_spec = mel_spec.half()
+    elif half == torch.float32 or half == torch.bfloat16:
+        pass
 
     return mel_spec
 
@@ -280,7 +291,8 @@ class EpochRecorder:
 def verify_remap_checkpoint(checkpoint_path, model, architecture):
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     checkpoint_state_dict = checkpoint["model"]
-    print(f"Verifying checkpoint for architecture: {architecture}")
+    print(f"Verifying checkpoint for selected architecture: {architecture}")
+    
     try:
         if architecture == "RVC":
             if hasattr(model, "module"):
@@ -288,33 +300,58 @@ def verify_remap_checkpoint(checkpoint_path, model, architecture):
             else:
                 model.load_state_dict(checkpoint_state_dict)
         elif architecture in ["Fork", "Fork/Applio"]:
-            print(f"non-RVC architecture pretrains detected. Checking for old keys ...")
-            if any(key.endswith(".weight_v") for key in checkpoint_state_dict.keys()) and any(key.endswith(".weight_g") for key in checkpoint_state_dict.keys()):
-                print(f"Old keys detected. Converting .weight_v and .weight_g to new format.")
+            print("Non-RVC architecture pretrains detected. Checking for old keys...")
+            
+            # Check for old keys and remap them if found
+            if any(key.endswith(".weight_v") for key in checkpoint_state_dict.keys()) and \
+               any(key.endswith(".weight_g") for key in checkpoint_state_dict.keys()):
+                print("Old keys detected. Converting .weight_v and .weight_g to new format...")
                 checkpoint_state_dict = replace_keys_in_dict(
-                    checkpoint_state_dict, 
-                    ".weight_v", 
+                    checkpoint_state_dict,
+                    ".weight_v",
                     ".parametrizations.weight.original1"
                 )
+                print("Remapping `.weight_v` keys completed.")
                 checkpoint_state_dict = replace_keys_in_dict(
-                    checkpoint_state_dict, 
-                    ".weight_g", 
+                    checkpoint_state_dict,
+                    ".weight_g",
                     ".parametrizations.weight.original0"
                 )
+                print("Remapping `.weight_g` keys completed.")
             else:
-                print("No old keys detected.. proceeding without remapping.")
-
+                print("No old keys detected. Proceeding without remapping.")
+            
+            # Load the state dictionary after remapping
             if hasattr(model, "module"):
                 model.module.load_state_dict(checkpoint_state_dict)
             else:
                 model.load_state_dict(checkpoint_state_dict)
 
-    except RuntimeError:
-        print(f"The parameters of the pretrain model such as the sample rate or architecture (Detected: {architecture}) doesn't match the selected model settings.")
+    except RuntimeError as e:
+        error_message = str(e)
+        if "size mismatch for" in error_message:
+            print("\nError: A size mismatch was detected between the checkpoint and the model.")
+            print("This usually means the model's architecture or sample rate is different from the checkpoint's.")
+            print("Please check your model settings.")
+            print("Detailed mismatch report:")
+            for mismatch in error_message.split("\n"):
+                if "size mismatch for" in mismatch:
+                    print(f"  - {mismatch.strip()}")
+        elif "Missing key(s) in state_dict:" in error_message or "Unexpected key(s) in state_dict:" in error_message:
+            print("\nError: Key mismatch detected. The checkpoint's parameters do not match the model's.")
+            print("This may be due to a different architecture or a corrupted checkpoint.")
+            print("Missing or unexpected keys details:")
+            print(error_message)
+        else:
+            print(f"An unknown runtime error occurred when loading the checkpoint.")
+            print(f"Please check your model settings for compatibility with the checkpoint.")
+            print(f"Original PyTorch error: {e}")
+        
         sys.exit(1)
     else:
         del checkpoint
         del checkpoint_state_dict
+        print("Checkpoint successfully verified and loaded.")
 
 
 def main():
@@ -448,16 +485,18 @@ def run(
         print(f"    ██████  Warmup Enabled for: {warmup_duration} epochs.")
 
     # Precision init msg:
-    if not config.train.bf16_run:
+    if not (config.train.bf16_run or config.train.fp16_run):
         if torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32:
             print("    ██████  PRECISION: TF32")
         else:
             print("    ██████  PRECISION: FP32")
-    else:
+    elif config.train.bf16_run:
         if torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32:
             print("    ██████  PRECISION: TF32 / BF16 - AMP")
         else:
             print("    ██████  PRECISION: FP32 / BF16 - AMP")
+    elif config.train.fp16_run:
+        print("    ██████  PRECISION: FP32 / BF16 - AMP")
 
     # backends.cudnn checks:
         # For benchmark:
@@ -688,7 +727,6 @@ def run(
     elif optimizer_choice == "AdamW":
         optim_g = torch.optim.AdamW(net_g.parameters(), **common_args_g)
         optim_d = torch.optim.AdamW(net_d.parameters(), **common_args_d)
-
     elif optimizer_choice == "AdamW_BF16":
         # BF16 friendly AdamW variant
         from rvc.train.custom_optimizers.adamw_bfloat import BFF_AdamW
@@ -845,6 +883,11 @@ def run(
             scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR( optim_g, T_max=custom_total_epoch, eta_min=3e-5, last_epoch=epoch_str - 1 )
             scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR( optim_d, T_max=custom_total_epoch, eta_min=3e-5, last_epoch=epoch_str - 1 )
 
+    # Init for GradScaler
+    use_gradscaler = device.type == "cuda" and train_dtype == torch.float16
+    gradscaler = torch.amp.GradScaler(enabled=use_gradscaler)
+
+
     # Reference sample fetching mechanism:
     # Feel free to customize the path or namings ( make sure to change em in ' if ' block too. )
     reference_path = os.path.join("logs", "reference")
@@ -927,6 +970,7 @@ def run(
             reference,
             fn_spectral_loss,
             n_gpus,
+            gradscaler,
             hann_window,
         )
         if use_warmup and epoch <= warmup_duration:
@@ -972,6 +1016,7 @@ def training_loop(
     reference,
     fn_spectral_loss,
     n_gpus,
+    gradscaler,
     hann_window=None,
 ):
     """
@@ -1048,6 +1093,8 @@ def training_loop(
             "loss_sd_50": deque(maxlen=50),
         })
 
+    use_amp = (config.train.bf16_run or config.train.fp16_run) and device.type == "cuda"
+
     with tqdm(total=len(train_loader), leave=False) as pbar:
         for batch_idx, info in data_iterator:
 
@@ -1072,10 +1119,8 @@ def training_loop(
                 sid,
             ) = info
 
-            use_amp = config.train.bf16_run and device.type == "cuda"
-
             # Generator forward pass:
-            with autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
+            with autocast(device_type="cuda", enabled=use_amp, dtype=train_dtype):
                 model_output = net_g(phone, phone_lengths, pitch, pitchf, spec, spec_lengths, sid)
                 # Unpacking:
                 if vocoder == "RingFormer":
@@ -1101,70 +1146,95 @@ def training_loop(
 
             # Discriminator forward pass:
             for _ in range(d_updates_per_step):  # default is 1 update per step
-                with autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
+                with autocast(device_type="cuda", enabled=use_amp, dtype=train_dtype):
                     y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
 
-                # Compute discriminator loss:
-                loss_disc = discriminator_loss(y_d_hat_r, y_d_hat_g)
+                with autocast(device_type="cuda", enabled=False):
+                    # Compute discriminator loss:
+                    loss_disc = discriminator_loss(y_d_hat_r, y_d_hat_g)
 
                 # Discriminator backward and update:
                 optim_d.zero_grad()
-                loss_disc.backward()
-                # 1. Grads norm clip
-                grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=999999) # 1000 / 999999
-                # 2. Retrieve the clipped grads
-                grad_norm_d_clipped = commons.get_total_norm([p.grad for p in net_d.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=True)
-                # 3. Optimization step
-                optim_d.step()
-
+                if train_dtype == torch.float16:
+                    # 0. GradScaler handling
+                    gradscaler.scale(loss_disc).backward()
+                    gradscaler.unscale_(optim_d)
+                    # 1. Grads norm clip
+                    grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=999999)
+                    # 2. Retrieve the clipped grads
+                    grad_norm_d_clipped = commons.get_total_norm([p.grad for p in net_d.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=False)
+                    # 3. Optimization step
+                    gradscaler.step(optim_d)
+                else:
+                    loss_disc.backward()
+                    # 1. Grads norm clip
+                    grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=999999) # 1000 / 999999
+                    # 2. Retrieve the clipped grads
+                    grad_norm_d_clipped = commons.get_total_norm([p.grad for p in net_d.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=True)
+                    # 3. Optimization step
+                    optim_d.step()
 
             # Run discriminator on generated output
-            with autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
+            with autocast(device_type="cuda", enabled=use_amp, dtype=train_dtype):
                 _, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
 
             # Compute generator losses:
+            with autocast(device_type="cuda", enabled=False):
 
-            # Spectral loss ( In code kept referenced as "loss_mel" to avoid confusion in old logs / graphs):
-            if spectral_loss == "L1 Mel Loss":
-                y_mel = wave_to_mel(y)
-                y_hat_mel = wave_to_mel(y_hat)
-                loss_mel = fn_spectral_loss(y_mel, y_hat_mel) * config.train.c_mel
-            elif spectral_loss == "Multi-Scale Mel Loss":
-                loss_mel = fn_spectral_loss(y, y_hat) * config.train.c_mel / 3.0
-            elif spectral_loss == "Multi-Res STFT Loss":
-                loss_mel = fn_spectral_loss(y_hat, y) * c_stft
+                # Spectral loss ( In code kept referenced as "loss_mel" to avoid confusion in old logs / graphs):
+                if spectral_loss == "L1 Mel Loss":
+                    y_mel = wave_to_mel(y, half=train_dtype)
+                    y_hat_mel = wave_to_mel(y_hat, half=train_dtype)
+                    loss_mel = fn_spectral_loss(y_mel, y_hat_mel) * config.train.c_mel
+                elif spectral_loss == "Multi-Scale Mel Loss":
+                    loss_mel = fn_spectral_loss(y, y_hat) * config.train.c_mel / 3.0
+                elif spectral_loss == "Multi-Res STFT Loss":
+                    loss_mel = fn_spectral_loss(y_hat, y) * c_stft
 
-            # Feature Matching loss
-            loss_fm = feature_loss(fmap_r, fmap_g)
- 
-            # Generator loss 
-            loss_adv = generator_loss(y_d_hat_g)
+                # Feature Matching loss
+                loss_fm = feature_loss(fmap_r, fmap_g)
+     
+                # Generator loss 
+                loss_adv = generator_loss(y_d_hat_g)
 
-            # KL ( Kullback–Leibler divergence ) loss
-            loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * config.train.c_kl
+                # KL ( Kullback–Leibler divergence ) loss
+                loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * config.train.c_kl
 
-            if vocoder == "RingFormer":
-                # RingFormer related;  Phase, Magnitude and SD:
-                loss_magnitude = torch.nn.functional.l1_loss(mag, target_magnitude)
-                loss_phase = phase_loss(y_stft, y_hat_stft)
-                loss_sd = (loss_magnitude + loss_phase) * 0.7
+                if vocoder == "RingFormer":
+                    # RingFormer related;  Phase, Magnitude and SD:
+                    loss_magnitude = torch.nn.functional.l1_loss(mag, target_magnitude)
+                    loss_phase = phase_loss(y_stft, y_hat_stft)
+                    loss_sd = (loss_magnitude + loss_phase) * 0.7
 
-            # Total generator loss
-            if vocoder == "RingFormer":
-                loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl + loss_sd
-            else:
-                loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl
+                # Total generator loss
+                if vocoder == "RingFormer":
+                    loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl + loss_sd
+                else:
+                    loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl
 
 
             # Generator backward and update:
             optim_g.zero_grad()
-            loss_gen_total.backward()
-            # 1. Grads norm clip
-            grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=999999) # 1000 / 999999
-            # 2. Retrieve the clipped grads
-            grad_norm_g_clipped = commons.get_total_norm([p.grad for p in net_g.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=True)
-            # 3. Optimization step
-            optim_g.step()
+            if train_dtype == torch.float16:
+                # 0. GradScaler handling
+                gradscaler.scale(loss_gen_total).backward()
+                gradscaler.unscale_(optim_g)
+                # 1. Grads norm clip
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=999999)
+                # 2. Retrieve the clipped grads
+                grad_norm_g_clipped = commons.get_total_norm([p.grad for p in net_g.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=False)
+                # 3. Optimization step
+                gradscaler.step(optim_g)
+                gradscaler.update()
+            else:
+                loss_gen_total.backward()
+                # 1. Grads norm clip
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=999999) # 1000 / 999999
+                # 2. Retrieve the clipped grads
+                grad_norm_g_clipped = commons.get_total_norm([p.grad for p in net_g.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=True)
+                # 3. Optimization step
+                optim_g.step()
+
 
             if not from_scratch:
                 # Loss accumulation In the epoch_loss_tensor
@@ -1261,6 +1331,10 @@ def training_loop(
             config.data.mel_fmax,
         )
 
+        # For fp16 we need to .half() the mel spec
+        if train_dtype == torch.float16:
+            mel = mel.half()
+
         # Used for tensorboard chart - slice/mel_org
         if randomized:
             y_mel = commons.slice_segments(
@@ -1273,7 +1347,7 @@ def training_loop(
             y_mel = mel
 
         # used for tensorboard chart - slice/mel_gen
-        y_hat_mel = wave_to_mel(y_hat)
+        y_hat_mel = wave_to_mel(y_hat, half=train_dtype)
 
         # Mel similarity metric:
         mel_similarity = mel_spec_similarity(y_hat_mel, y_mel)
@@ -1315,11 +1389,18 @@ def training_loop(
             num_batches_in_epoch = 0
             epoch_loss_tensor.zero_()
 
+        # Determine the plot data type
+        if train_dtype == torch.float16:
+            plot_dtype = torch.float16
+        else:
+            plot_dtype = torch.float32
+
         image_dict = {
-            "slice/mel_org": plot_spectrogram_to_numpy(y_mel[0].detach().cpu().to(torch.float32).numpy()),
-            "slice/mel_gen": plot_spectrogram_to_numpy(y_hat_mel[0].detach().cpu().to(torch.float32).numpy()),
-            "all/mel": plot_spectrogram_to_numpy(mel[0].detach().cpu().to(torch.float32).numpy()),
+            "slice/mel_org": plot_spectrogram_to_numpy(y_mel[0].detach().cpu().to(plot_dtype).numpy()),
+            "slice/mel_gen": plot_spectrogram_to_numpy(y_hat_mel[0].detach().cpu().to(plot_dtype).numpy()),
+            "all/mel": plot_spectrogram_to_numpy(mel[0].detach().cpu().to(plot_dtype).numpy()),
         }
+
 
         # At each epoch save point:
         if epoch % save_every_epoch == 0:
@@ -1334,6 +1415,11 @@ def training_loop(
                     global_step,
                 )
             # Inferencing on reference sample
+
+#            with torch.amp.autocast(
+#                device_type="cuda", enabled=use_amp, dtype=train_dtype
+#            ):
+
             net_g.eval()
             with torch.no_grad():
                 if hasattr(net_g, "module"):
@@ -1470,8 +1556,8 @@ def validation_loop(net_g, val_loader, device, hps, writer, global_step):
             y_len = y.shape[-1]
 
         # Obtaining mel specs
-            y_hat_mel = wave_to_mel(y_hat) # generator-source mel
-            mel = wave_to_mel(y) # gt-source mel
+            y_hat_mel = wave_to_mel(y_hat, half=train_dtype) # generator-source mel
+            mel = wave_to_mel(y, half=train_dtype) # gt-source mel
 
         # Mel loss:
             y_hat_mel_len = y_hat_mel.shape[-1]
