@@ -16,7 +16,7 @@ from torch.utils.checkpoint import checkpoint
 import einops
 import numpy as np
 
-from rvc.lib.algorithm.residuals import ResBlock, ResBlock_Snake, ResBlock_Snake_Fused, ResBlock_SnakeBeta
+from rvc.lib.algorithm.residuals import ResBlock, ResBlock_Snake_Fused, ResBlock_SnakeBeta
 from rvc.lib.algorithm.conformer.conformer import Conformer
 
 from rvc.lib.algorithm.commons import init_weights
@@ -290,11 +290,10 @@ class RingFormerGenerator(torch.nn.Module):
         Available ResBlock types:
 
             - ResBlock:  HiFi-Gan's 'ResBlock1' without any extras
-            - ResBlock_Snake:  'ResBlock1' enriched with Snake activation ( Borrowed from 'RiFornet' ) ; https://github.com/Respaired/RiFornet_Vocoder
             - ResBlock_Snake_Fused:  'ResBlock1' I modified by adding in Snake activation with triton fused kernel ( Forward, Backward ) ; https://github.com/falkaer/pytorch-snake
             - ResBlock_SnakeBeta: 'ResBlock1' which is using Snake-Beta instead of Snake. Has learnable both alphas and betas ; https://github.com/NVIDIA/BigVGAN/blob/main/activations.py
         '''
-        ResBlock_Type = ResBlock_Snake_Fused # ResBlock_SnakeBeta
+        ResBlock_Type = ResBlock_SnakeBeta
 
         self.m_source = SourceModuleHnNSF(
             sample_rate=sr,

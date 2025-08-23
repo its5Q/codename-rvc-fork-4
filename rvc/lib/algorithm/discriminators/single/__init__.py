@@ -1,0 +1,4 @@
+from .mpd_discriminator import MultiPeriodDiscriminator
+from .mrd_discriminator import MultiResolutionDiscriminator
+from .mssbcqt_discriminator import MultiScaleSubbandCQTDiscriminator
+from .reswise_mpd_discriminator import ResWiseMultiPeriodDiscriminator

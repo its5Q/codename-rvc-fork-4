@@ -6,7 +6,7 @@ from rvc.lib.algorithm.commons import get_padding
 from rvc.lib.algorithm.residuals import LRELU_SLOPE
 
 
-class MultiPeriod_MultiScale_Discriminator(torch.nn.Module):
+class MPD_MSD_Combined(torch.nn.Module):
     """
     Multi-period and Multi-scale discriminators combined.
 

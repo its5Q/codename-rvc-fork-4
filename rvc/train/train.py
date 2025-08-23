@@ -161,7 +161,7 @@ debug_shapes = False
 
 # EXPERIMENTAL
 c_stft = 21.0 # 18.0
-use_mrd_med = True
+use_triple_disc = True
 
 import logging
 logging.getLogger("torch").setLevel(logging.ERROR)
@@ -637,18 +637,18 @@ def run(
     # Initialize discriminator/s
 
     if vocoder == "RingFormer":
-        # MPD + MSD + MRD
-        from rvc.lib.algorithm.discriminators.multi.mpd_msd_mrd_combined import MPD_MSD_MRD_Combined
-        net_d = MPD_MSD_MRD_Combined(config.model.use_spectral_norm, use_checkpointing=use_checkpointing, **dict(config.mrd))
-
-#        # MRD
-#        from rvc.lib.algorithm.discriminators.single.mrd_discriminator import MultiResolutionDiscriminator
-#        net_d = MultiResolutionDiscriminator(**dict(config.mrd))
-        
+        if use_triple_disc:
+            # MultiPeriodDiscriminator + MultiResolutionDiscriminator ( unified ) - RingFormer architecture v2
+            from rvc.lib.algorithm.discriminators.multi import MPD_MRD_Combined
+            net_d = MPD_MRD_Combined(config.model.use_spectral_norm, use_checkpointing=use_checkpointing, **dict(config.mrd))
+        else:
+            # MultiPeriodDiscriminator + MultiResolutionDiscriminator + MultiScaleDiscriminator ( unified ) - RingFormer architecture v1
+            from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_Combined
+            net_d = MPD_MSD_MRD_Combined(config.model.use_spectral_norm, use_checkpointing=use_checkpointing, **dict(config.mrd))
     else:
-        # MultiPeriodDiscriminator + MultiScaleDiscriminator ( unified )
-        from rvc.lib.algorithm.discriminators.multi.mpd_msd_discriminators import MultiPeriod_MultiScale_Discriminator
-        net_d = MultiPeriod_MultiScale_Discriminator(
+        # MultiPeriodDiscriminator + MultiScaleDiscriminator ( unified ) - Original RVC Setup
+        from rvc.lib.algorithm.discriminators.multi import MPD_MSD_Combined
+        net_d = MPD_MSD_Combined(
             config.model.use_spectral_norm, use_checkpointing=use_checkpointing
         )
 

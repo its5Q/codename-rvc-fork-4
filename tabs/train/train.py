@@ -276,17 +276,21 @@ def auto_enable_checkpointing():
     except:
         return False
 
+# Init state for certain options.
+initial_sample_rate_choices = ["32000", "40000", "48000"]
+initial_sample_rate = "48000"
+
 # Microarch. dependent features, options, functionalities etc.. Might expand in future.
 fp16_check = None
 
 if microarchitecture_capability_checker():
-    # "Ampere" microarchitecture and higher:
+    # Ampere-Microarchitecture and higher viable:
     initial_optimizer_choices = ["AdamW_BF16", "AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
     initial_optimizer = "AdamW_BF16"
     architecture_choices = ["RVC", "Fork/Applio", "Fork"]
     fp16_check = True
 else:
-    # Below "Ampere" microarchitecture:
+    # Below Ampere-Microarchitecture viable:
     initial_optimizer_choices = ["AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
     initial_optimizer = "AdamW"
     architecture_choices = ["RVC", "Fork/Applio"]
@@ -297,6 +301,7 @@ if fp16_check:
     if check_if_fp16():
         initial_optimizer = "AdamW"
         initial_optimizer_choices = ["AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
+
 
 # Train Tab
 def train_tab():
@@ -333,8 +338,8 @@ def train_tab():
                 sampling_rate = gr.Radio(
                     label="Sampling Rate",
                     info="The sampling rate of the model you wanna train. \n**( If possible, should match your dataset. Small deviations are allowed. )**",
-                    choices=["24000", "32000", "40000", "48000"],
-                    value="48000",
+                    choices=initial_sample_rate_choices,
+                    value=initial_sample_rate,
                     interactive=True,
                 )
                 vocoder = gr.Radio(
@@ -405,10 +410,25 @@ def train_tab():
         refresh = gr.Button("Refresh")
 
         with gr.Accordion("Advanced Settings for the preprocessing step", open=True):
+            gr.Markdown(
+            """
+             
+             
+            **The provided default settings are optimal for anyone as long:**
+             
+            + Your dataset is a " 1 file " type ( Say, fused all smaller samples / chunks into 1 .wav file )
+            + You performed silence-truncation the right way
+             
+             
+            ( Generally.. you shouldn't tweak these unless you know what and why you're doing it. )
+            <br>
+            (( The only exception would be for " DC / high-pass filtering " and " Noise Reduction " ~ Read their description. ))
+            """
+            )
             with gr.Row():
                 loading_resampling = gr.Radio(
                     label="Resampling & Loading Handler",
-                    info="- **librosa** - Uses SoX resampler ( VHQ ).\n- **ffmpeg** -  Uses SW resampler ( Windowed Sinc filter with Blackman-Nuttall window ) \n\n **At this given moment unsure which is better for rvc's particular case.** \n **( But I'd probs go with Sinc / FFmpeg. )**",
+                    info="- **librosa** - Uses SoX resampler \n ( SoXr set to VHQ by default. ).\n- **ffmpeg** -  Uses SW resampler \n ( Windowed Sinc filter with Blackman-Nuttall window ) \n\n **Both are viable choices!** \n **( But I'd actually go with Sinc / FFmpeg. )**",
                     choices=["librosa", "ffmpeg"],
                     value="ffmpeg",
                     interactive=True,
@@ -424,10 +444,18 @@ def train_tab():
                 )
                 target_lufs = gr.Number(
                     label="Target LUFS",
-                    info="Specify target LUFS for loudness normalization. \n **If unsure what it does, keep it set to -20.0** \n\n **( Viable range to try: -22 <-> -14 )** \n **( PS. If chosen LUFS doesn't fit your set,** \n **the LUFS finder gonna kick in so, don't worry :> )**",
+                    info="Specify **target LUFS** for: \n 'pyloudnorm' loudness normalization. \n \n **If unsure what it does:** \n - **Keep it set to -20.0** \n - **Keep LUFS finder enabled.**",
                     value=-20.0,
                     interactive=True,
                     scale=0.9,
+                )
+                lufs_range_finder = gr.Checkbox(
+                    label="LUFS range finder",
+                    info="Enable to automatically: \n - Find the LUFS **for your dataset.** \n( Just sit back and relax :> ) \n \n Disable if: \n - You **already know** what LUFS to use. \n - Your dataset **is HUGE** \n **( Unless you can afford to wait ig? )** \n ",
+                    value=True,
+                    interactive=True,
+                    visible=True,
+                    scale=0.8,
                 )
             with gr.Row():
                 cut_preprocess = gr.Radio(
@@ -508,6 +536,7 @@ def train_tab():
                     normalization_mode,
                     loading_resampling,
                     target_lufs,
+                    lufs_range_finder,
                 ],
                 outputs=[preprocess_output_info],
             )

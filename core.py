@@ -436,6 +436,7 @@ def run_preprocess_script(
     normalization_mode: str = "none",
     loading_resampling: str = "librosa",
     target_lufs: float = -20,
+    lufs_range_finder: bool = True,
 ):
     preprocess_script_path = os.path.join("rvc", "train", "preprocess", "preprocess.py")
     command = [
@@ -457,6 +458,7 @@ def run_preprocess_script(
                 normalization_mode,
                 loading_resampling,
                 target_lufs,
+                lufs_range_finder,
             ],
         ),
     ]
@@ -1972,6 +1974,14 @@ def parse_arguments():
         default=-20,
         required=False,
     )
+    preprocess_parser.add_argument(
+        "--lufs_range_finder",
+        type=bool,
+        help="Enable to find the LUFS for your dataset automatically",
+        default=True,
+        required=True,
+    )
+
     # Parser for 'extract' mode
     extract_parser = subparsers.add_parser(
         "extract", help="Extract features from a dataset."
@@ -2552,6 +2562,7 @@ def main():
                 normalization_mode=args.normalization_mode,
                 loading_resampling=args.loading_resampling,
                 target_lufs=args.target_lufs,
+                lufs_range_finder=args.lufs_range_finder
             )
         elif args.mode == "extract":
             run_extract_script(

@@ -62,7 +62,7 @@ def secs_to_samples(secs, sr):
 
 
 class PreProcess:
-    def __init__(self, sr: int, exp_dir: str):
+    def __init__(self, sr: int, exp_dir: str, dry_run: bool = False):
         self.slicer = Slicer(
             sr=sr,
             threshold=-42,
@@ -75,10 +75,17 @@ class PreProcess:
         self.b_high, self.a_high = signal.butter(N=5, Wn=HIGH_PASS_CUTOFF, btype="high", fs=self.sr)
         self.exp_dir = exp_dir
         self.device = "cpu"
-        self.gt_wavs_dir = os.path.join(exp_dir, "sliced_audios")
-        self.wavs16k_dir = os.path.join(exp_dir, "sliced_audios_16k")
-        os.makedirs(self.gt_wavs_dir, exist_ok=True)
-        os.makedirs(self.wavs16k_dir, exist_ok=True)
+        self.dry_run = dry_run
+
+        # Only create directories if not in dry run mode
+        if not self.dry_run:
+            self.gt_wavs_dir = os.path.join(exp_dir, "sliced_audios")
+            self.wavs16k_dir = os.path.join(exp_dir, "sliced_audios_16k")
+            os.makedirs(self.gt_wavs_dir, exist_ok=True)
+            os.makedirs(self.wavs16k_dir, exist_ok=True)
+        else:
+            self.gt_wavs_dir = None
+            self.wavs16k_dir = None
 
     def _normalize_audio_blend(self, audio: np.ndarray):
         tmp_max = np.abs(audio).max()
@@ -114,27 +121,30 @@ class PreProcess:
             if not isinstance(normalized_audio, np.ndarray):
                 logger.warning(f"Audio segment {sid}-{idx0}-{idx1} discarded due to clipping. LUFS target you picked isn't adequate for your set.")
                 return
-        # Saving slices for GroundTruth ( 'sliced_audios' dir )
-        wavfile.write(
-            os.path.join(self.gt_wavs_dir, f"{sid}_{idx0}_{idx1}.wav"),
-            self.sr,
-            normalized_audio.astype(np.float32),
-        )
-        # Resampling of slices for wavs16k ( 'sliced_audios_16k' dir )
-        if loading_resampling == "librosa":
-            chunk_16k = librosa.resample(
-                normalized_audio, orig_sr=self.sr, target_sr=SAMPLE_RATE_16K, res_type=RES_TYPE
+
+        # Only save files if not in dry run mode
+        if not self.dry_run:
+            # Saving slices for GroundTruth ( 'sliced_audios' dir )
+            wavfile.write(
+                os.path.join(self.gt_wavs_dir, f"{sid}_{idx0}_{idx1}.wav"),
+                self.sr,
+                normalized_audio.astype(np.float32),
             )
-        else: # ffmpeg
-            chunk_16k = load_audio_ffmpeg(
-                normalized_audio, sample_rate=SAMPLE_RATE_16K, source_sr=self.sr,
+            # Resampling of slices for wavs16k ( 'sliced_audios_16k' dir )
+            if loading_resampling == "librosa":
+                chunk_16k = librosa.resample(
+                    normalized_audio, orig_sr=self.sr, target_sr=SAMPLE_RATE_16K, res_type=RES_TYPE
+                )
+            else: # ffmpeg
+                chunk_16k = load_audio_ffmpeg(
+                    normalized_audio, sample_rate=SAMPLE_RATE_16K, source_sr=self.sr,
+                )
+            # Saving slices for 16khz ( 'sliced_audios_16k' dir )
+            wavfile.write(
+                os.path.join(self.wavs16k_dir, f"{sid}_{idx0}_{idx1}.wav"),
+                SAMPLE_RATE_16K,
+                chunk_16k.astype(np.float32),
             )
-        # Saving slices for 16khz ( 'sliced_audios_16k' dir )
-        wavfile.write(
-            os.path.join(self.wavs16k_dir, f"{sid}_{idx0}_{idx1}.wav"),
-            SAMPLE_RATE_16K,
-            chunk_16k.astype(np.float32),
-        )
     def simple_cut(
         self,
         audio: np.ndarray,
@@ -163,23 +173,26 @@ class PreProcess:
             if len(chunk) < chunk_len_smpl:
                 logger.warning(f"The last resulting slice ({sid}-{idx0}-{slice_idx}) is too short: {len(chunk)} < {chunk_len_smpl} samples - Discarding!")
                 break
-            # Saving slices for GroundTruth ( 'sliced_audios' dir )
-            wavfile.write(
-                os.path.join(self.gt_wavs_dir, f"{sid}_{idx0}_{slice_idx}.wav"),
-                self.sr, chunk.astype(np.float32))
-            # Resampling of slices for wavs16k ( 'sliced_audios_16k' dir )
-            if loading_resampling == "librosa":
-                chunk_16k = librosa.resample(
-                    chunk, orig_sr=self.sr, target_sr=SAMPLE_RATE_16K, res_type=RES_TYPE
-                )
-            else: # ffmpeg
-                chunk_16k = load_audio_ffmpeg(
-                    chunk, sample_rate=SAMPLE_RATE_16K, source_sr=self.sr,
-                )
-            # Saving slices for 16khz ( 'sliced_audios_16k' dir )
-            wavfile.write(
-                os.path.join(self.wavs16k_dir, f"{sid}_{idx0}_{slice_idx}.wav"),
-                SAMPLE_RATE_16K, chunk_16k.astype(np.float32))
+
+            # Only save files if not in dry run mode
+            if not self.dry_run:
+                # Saving slices for GroundTruth ( 'sliced_audios' dir )
+                wavfile.write(
+                    os.path.join(self.gt_wavs_dir, f"{sid}_{idx0}_{slice_idx}.wav"),
+                    self.sr, chunk.astype(np.float32))
+                # Resampling of slices for wavs16k ( 'sliced_audios_16k' dir )
+                if loading_resampling == "librosa":
+                    chunk_16k = librosa.resample(
+                        chunk, orig_sr=self.sr, target_sr=SAMPLE_RATE_16K, res_type=RES_TYPE
+                    )
+                else: # ffmpeg
+                    chunk_16k = load_audio_ffmpeg(
+                        chunk, sample_rate=SAMPLE_RATE_16K, source_sr=self.sr,
+                    )
+                # Saving slices for 16khz ( 'sliced_audios_16k' dir )
+                wavfile.write(
+                    os.path.join(self.wavs16k_dir, f"{sid}_{idx0}_{slice_idx}.wav"),
+                    SAMPLE_RATE_16K, chunk_16k.astype(np.float32))
             slice_idx += 1
             i += stride
 
@@ -280,9 +293,7 @@ def cleanup_dirs(exp_dir):
         shutil.rmtree(wavs16k_dir)
         logger.info(f"Deleted directory: {wavs16k_dir}")
 
-
 def process_audio_worker(args):
-    # Each worker creates its own PreProcess instance
     (
         path,
         idx0,
@@ -298,8 +309,9 @@ def process_audio_worker(args):
         normalization_mode,
         loading_resampling,
         target_lufs,
+        dry_run,
     ) = args
-    pp = PreProcess(sr, exp_dir)
+    pp = PreProcess(sr, exp_dir, dry_run)
     return pp.process_audio(
         path,
         idx0,
@@ -329,13 +341,13 @@ def preprocess_training_set(
     normalization_mode: str,
     loading_resampling: str,
     target_lufs: float,
+    lufs_range_finder: bool
 ):
     start_time = time.time()
     logger.info(f"Starting preprocess with {num_processes} processes...")
 
     files = []
     idx = 0
-
     for root, _, filenames in os.walk(input_root):
         try:
             sid = 0 if root == input_root else int(os.path.basename(root))
@@ -348,15 +360,11 @@ def preprocess_training_set(
                 f'Speaker ID folder is expected to be integer, got "{os.path.basename(root)}" instead.'
             )
 
-    while True:
+    final_lufs_target = target_lufs
+    
+    if lufs_range_finder:
         try:
-            audio_lengths = []
-
-            gt_wavs_dir = os.path.join(exp_dir, "sliced_audios")
-            wavs16k_dir = os.path.join(exp_dir, "sliced_audios_16k")
-            os.makedirs(gt_wavs_dir, exist_ok=True)
-            os.makedirs(wavs16k_dir, exist_ok=True)
-
+            logger.info(f"Initial LUFS range-finder dry run with target: {target_lufs}")
             arg_list = [
                 (
                     file_path,
@@ -373,38 +381,158 @@ def preprocess_training_set(
                     normalization_mode,
                     loading_resampling,
                     target_lufs,
+                    True,
                 )
                 for (file_path, idx0, sid) in files
             ]
-
             with tqdm(total=len(arg_list)) as pbar:
                 with multiprocessing.Pool(processes=num_processes) as pool:
-                    for result in pool.imap_unordered(process_audio_worker, arg_list):
-                        audio_lengths.append(result)
+                    for _ in pool.imap_unordered(process_audio_worker, arg_list):
                         pbar.update(1)
 
-            total_audio_length = sum(audio_lengths)
-            save_dataset_duration(os.path.join(exp_dir, "model_info.json"), total_audio_length)
+            found_target = False
+            last_working_lufs = target_lufs
 
-            elapsed_time = time.time() - start_time
-            logger.info(f"Preprocess completed in {elapsed_time:.2f} seconds "
-                        f"on {format_duration(total_audio_length)} of audio.")
+            while True:
+                next_lufs = last_working_lufs + 1.0
+                logger.info(f"LUFS target {last_working_lufs} is safe. Trying a higher target: {next_lufs}")
+                try:
+                    arg_list = [
+                        (
+                            file_path,
+                            idx0,
+                            sid,
+                            sr,
+                            exp_dir,
+                            cut_preprocess,
+                            process_effects,
+                            noise_reduction,
+                            reduction_strength,
+                            chunk_len,
+                            overlap_len,
+                            normalization_mode,
+                            loading_resampling,
+                            next_lufs,
+                            True, # Dry run is True
+                        )
+                        for (file_path, idx0, sid) in files
+                    ]
+                    with tqdm(total=len(arg_list)) as pbar:
+                        with multiprocessing.Pool(processes=num_processes) as pool:
+                            for _ in pool.imap_unordered(process_audio_worker, arg_list):
+                                pbar.update(1)
+                    last_working_lufs = next_lufs
+                except ValueError:
+                    logger.error(f"Clipping detected at LUFS {next_lufs}. Selecting {last_working_lufs} as the final target.")
+                    final_lufs_target = last_working_lufs
+                    found_target = True
+                    break
 
-            break
+                if last_working_lufs > -5.0:
+                    logger.info(f"LUFS range-finder has finished. Final target is {last_working_lufs}.")
+                    final_lufs_target = last_working_lufs
+                    found_target = True
+                    break
+            if not found_target:
+                 final_lufs_target = last_working_lufs
 
-        except ValueError as e:
-            logger.error(f"Preprocessing aborted: {e}")
-            cleanup_dirs(exp_dir)
-            target_lufs -= 1.0
-            logger.info(f"Retrying with a lower LUFS target: {target_lufs}")
-            if target_lufs < -40.0:
-                logger.error("LUFS target too low. Aborting preprocessing.. uhh.. Guess your dataset is a no-go haha.")
-                break
+        except ValueError:
+            logger.info("Initial LUFS target caused clipping. Starting a backward search for a lower target.")
+            last_working_lufs = target_lufs
+            while True:
+                next_lufs = last_working_lufs - 1.0
+                logger.info(f"Trying a lower LUFS target: {next_lufs}")
+                try:
+                    arg_list = [
+                        (
+                            file_path,
+                            idx0,
+                            sid,
+                            sr,
+                            exp_dir,
+                            cut_preprocess,
+                            process_effects,
+                            noise_reduction,
+                            reduction_strength,
+                            chunk_len,
+                            overlap_len,
+                            normalization_mode,
+                            loading_resampling,
+                            next_lufs,
+                            True,
+                        )
+                        for (file_path, idx0, sid) in files
+                    ]
+                    with tqdm(total=len(arg_list)) as pbar:
+                        with multiprocessing.Pool(processes=num_processes) as pool:
+                            for _ in pool.imap_unordered(process_audio_worker, arg_list):
+                                pbar.update(1)
+
+                    logger.info(f"LUFS target {next_lufs} is safe. Selecting it as the final target.")
+                    final_lufs_target = next_lufs
+                    break
+
+                except ValueError:
+                    last_working_lufs = next_lufs
+                    if last_working_lufs < -30.0:
+                        logger.error("Could not find a safe LUFS target within range. Aborting.")
+                        cleanup_dirs(exp_dir)
+                        return
+
+    logger.info(f"Starting final processing run with LUFS target: {final_lufs_target}")
+    cleanup_dirs(exp_dir)
+
+    try:
+        audio_lengths = []
+        
+        # Recreate directories for the final save
+        gt_wavs_dir = os.path.join(exp_dir, "sliced_audios")
+        wavs16k_dir = os.path.join(exp_dir, "sliced_audios_16k")
+        os.makedirs(gt_wavs_dir, exist_ok=True)
+        os.makedirs(wavs16k_dir, exist_ok=True)
+
+        arg_list = [
+            (
+                file_path,
+                idx0,
+                sid,
+                sr,
+                exp_dir,
+                cut_preprocess,
+                process_effects,
+                noise_reduction,
+                reduction_strength,
+                chunk_len,
+                overlap_len,
+                normalization_mode,
+                loading_resampling,
+                final_lufs_target,
+                False, # Dry run is False for final save
+            )
+            for (file_path, idx0, sid) in files
+        ]
+
+        with tqdm(total=len(arg_list)) as pbar:
+            with multiprocessing.Pool(processes=num_processes) as pool:
+                for result in pool.imap_unordered(process_audio_worker, arg_list):
+                    audio_lengths.append(result)
+                    pbar.update(1)
+
+        total_audio_length = sum(audio_lengths)
+        save_dataset_duration(os.path.join(exp_dir, "model_info.json"), total_audio_length)
+
+        elapsed_time = time.time() - start_time
+        logger.info(f"Final preprocess completed in {elapsed_time:.2f} seconds "
+                    f"on {format_duration(total_audio_length)} of audio with LUFS: {final_lufs_target}.")
+
+    except ValueError as e:
+        logger.error(f"Final run failed: {e}. Aborting.")
+        cleanup_dirs(exp_dir)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 14:
-        print("Usage: python preprocess.py <experiment_directory> <input_root> <sample_rate> <num_processes or 'none'> <cut_preprocess> <process_effects> <noise_reduction> <reduction_strength> <chunk_len> <overlap_len> <normalization_mode> <loading_resampling> <target_lufs>")
+    if len(sys.argv) < 15:
+        print("Usage: python preprocess.py <experiment_directory> <input_root> <sample_rate> <num_processes or 'none'> <cut_preprocess> <process_effects> <noise_reduction> <reduction_strength> <chunk_len> <overlap_len> <normalization_mode> <loading_resampling> <target_lufs> <lufs_range_finder>")
         sys.exit(1)
     experiment_directory = str(sys.argv[1])
     input_root = str(sys.argv[2])
@@ -425,6 +553,7 @@ if __name__ == "__main__":
     normalization_mode = str(sys.argv[11])
     loading_resampling = str(sys.argv[12])
     target_lufs = float(sys.argv[13])
+    lufs_range_finder = bool(strtobool(sys.argv[14]))
 
     preprocess_training_set(
         input_root,
@@ -440,4 +569,5 @@ if __name__ == "__main__":
         normalization_mode,
         loading_resampling,
         target_lufs,
+        lufs_range_finder
     )
