@@ -22,11 +22,11 @@
 <br/>
 # ⚠️ㅤ**IMPORTANT** ㅤ⚠️
 `1. Datasets must be processed properly:`
-- Normalization
-- Peak-compression ( If necessary )
-- Silence-truncation
+- Peak or RMS compression if necessary! ( This step isn't covered by the fork's preprocessing btw.)
+- Silence-truncation ( Absolutely necessary. )
 - 'simple' method chosen for preprocessing ( Even 3 sec segments. )
-- 'post' as audio norm. option chosen in the ui. <br/>
+- Loudness Normalization mode set to 'post'. option chosen in the ui.
+- Enable automatic LUFS range finder for Loudness Normalization. <br/>
 ``Expect issues with PESQ and data alignment If the following requirements are not met.``
 
 
