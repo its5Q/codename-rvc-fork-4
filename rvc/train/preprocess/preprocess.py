@@ -285,7 +285,7 @@ def save_dataset_duration(file_path, dataset_duration):
 def cleanup_dirs(exp_dir):
     gt_wavs_dir = os.path.join(exp_dir, "sliced_audios")
     wavs16k_dir = os.path.join(exp_dir, "sliced_audios_16k")
-    logger.info("Cleaning up partially processed audio directories...")
+    logger.info("Cleaning up partially processed audio directories if they exist...")
     if os.path.exists(gt_wavs_dir):
         shutil.rmtree(gt_wavs_dir)
         logger.info(f"Deleted directory: {gt_wavs_dir}")

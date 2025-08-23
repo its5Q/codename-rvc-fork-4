@@ -620,8 +620,38 @@ def run(
             )
             os._exit(2333333)
 
-    # Initialize generatos
+    # Embedder / spk_dim alignment
+    embedder_name = "contentvec" # Default embedder
+    spk_dim = config.model.spk_embed_dim  # 109 default speakers
 
+    try:
+        with open(model_info_path, "r") as f:
+            model_info = json.load(f)
+            embedder_name = model_info["embedder_model"]
+            spk_dim = model_info["speakers_id"]
+    except Exception as e:
+        print(f"Could not load model info file: {e}. Using defaults.")
+
+    # Try to load speaker dim from latest checkpoint or pretrainG
+    try:
+        last_g = latest_checkpoint_path(experiment_dir, "G_*.pth")
+        chk_path = (
+            last_g if last_g else (pretrainG if pretrainG not in ("", "None") else None)
+        )
+
+        if chk_path:
+            ckpt = torch.load(chk_path, map_location="cpu", weights_only=True)
+            spk_dim = ckpt["model"]["emb_g.weight"].shape[0]
+            del ckpt
+    except Exception as e:
+        print(f"Failed to load checkpoint: {e}. Using default number of speakers.")
+
+    # update config before the model init
+    print(f"Initializing the generator with {spk_dim} speakers.")
+    config.model.spk_embed_dim = spk_dim
+
+
+    # Initialize generator
     from rvc.lib.algorithm.synthesizers import Synthesizer
     net_g = Synthesizer(
         config.data.filter_length // 2 + 1,
@@ -635,7 +665,6 @@ def run(
     )
 
     # Initialize discriminator/s
-
     if vocoder == "RingFormer":
         if use_triple_disc:
             # MultiPeriodDiscriminator + MultiResolutionDiscriminator ( unified ) - RingFormer architecture v2

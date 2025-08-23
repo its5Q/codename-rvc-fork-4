@@ -327,7 +327,7 @@ def train_tab():
                 )
                 vocoder_arch = gr.State("hifi_mrf_refine")
                 optimizer = gr.Radio(
-                    label="Architecture",
+                    label="Optimizer",
                     info="Choose an optimizer used in training:\n- **AdamW_BF16:** Good and reliable. ( BF16 ver. with error-correction and kahan summation ) \n- **AdamW:** Normal AdamW. ( **Use the BF16 version unless you train in FP32-only or FP16** ) \n- **RAdam:** Rectified Adam. ( **Can help** with early instability - **Most likely slower convergence** ) \n- **Ranger21:** AdamW + LookAhead and few more extras. ( **Most likely unstable** ) \n- **DiffGrad:** An optimizer with CNN in mind. ( **Probs** a good AdamW alternative - **For finetuning** ) \n- **Prodigy:** A self-tuning optimizer. Lr will adapt automatically ( **Don't touch the lr** )",
                     choices=initial_optimizer_choices,
                     value=initial_optimizer,
