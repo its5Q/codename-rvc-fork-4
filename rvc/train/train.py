@@ -118,6 +118,7 @@ current_dir = os.getcwd()
 experiment_dir = os.path.join(current_dir, "logs", model_name)
 config_save_path = os.path.join(experiment_dir, "config.json")
 dataset_path = os.path.join(experiment_dir, "sliced_audios")
+model_info_path = os.path.join(experiment_dir, "model_info.json")
 
 try:
     with open(config_save_path, "r") as f:
@@ -161,7 +162,7 @@ debug_shapes = False
 
 # EXPERIMENTAL
 c_stft = 21.0 # 18.0
-use_triple_disc = True
+use_triple_disc = False
 
 import logging
 logging.getLogger("torch").setLevel(logging.ERROR)
@@ -647,7 +648,7 @@ def run(
         print(f"Failed to load checkpoint: {e}. Using default number of speakers.")
 
     # update config before the model init
-    print(f"Initializing the generator with {spk_dim} speakers.")
+    print(f"    ██████  Initializing the generator with: {spk_dim} speakers.")
     config.model.spk_embed_dim = spk_dim
 
 
@@ -666,14 +667,9 @@ def run(
 
     # Initialize discriminator/s
     if vocoder == "RingFormer":
-        if use_triple_disc:
-            # MultiPeriodDiscriminator + MultiResolutionDiscriminator ( unified ) - RingFormer architecture v2
-            from rvc.lib.algorithm.discriminators.multi import MPD_MRD_Combined
-            net_d = MPD_MRD_Combined(config.model.use_spectral_norm, use_checkpointing=use_checkpointing, **dict(config.mrd))
-        else:
-            # MultiPeriodDiscriminator + MultiResolutionDiscriminator + MultiScaleDiscriminator ( unified ) - RingFormer architecture v1
-            from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_Combined
-            net_d = MPD_MSD_MRD_Combined(config.model.use_spectral_norm, use_checkpointing=use_checkpointing, **dict(config.mrd))
+        # MultiPeriodDiscriminator + MultiResolutionDiscriminator + MultiScaleDiscriminator ( unified ) - RingFormer architecture v1
+        from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_Combined
+        net_d = MPD_MSD_MRD_Combined(config.model.use_spectral_norm, use_checkpointing=use_checkpointing, **dict(config.mrd))
     else:
         # MultiPeriodDiscriminator + MultiScaleDiscriminator ( unified ) - Original RVC Setup
         from rvc.lib.algorithm.discriminators.multi import MPD_MSD_Combined

@@ -344,7 +344,7 @@ def train_tab():
                 )
                 vocoder = gr.Radio(
                     label="Vocoder",
-                    info="**Vocoder for audio synthesis:** \n**HiFi-GAN:** \n- **Decent-Quality:ㅤGood ol' NSF-HiFi-GAN - Reliable, but has it's issues. ( RVC's og vocoder )** \n- **COMPATIBILITY:ㅤAll clients incl. Mainline RVC / W-okada etc.** \n\n**RefineGAN:** \n - **High-Quality(?): NSF-HiFi-Gan + ParallelResBlock + AdaIN** \n- **COMPATIBILITY:ㅤThis Fork or Applio ( afaik, no rt-vc clients support it. )** \n\n**RingFormer:** \n- **Highest-Quality:ㅤA hybrid Conformer-Based Vocoder + Snake-Beta act. + RingAttention** \n- **COMPATIBILITY:ㅤThis Fork ( As for rt-vc, 'Vonovox' supports it. )** \n\n **( RingFormer Requires min. RTX 30xx [ At least Ampere microarchitecture ] )** ",
+                    info="**Vocoder for audio synthesis:** \n \n **HiFi-GAN:** \n- **Decent-Quality:ㅤGood ol' NSF-HiFi-GAN - Reliable, but has it's issues. ( RVC's og vocoder )** \n- **COMPATIBILITY:ㅤAll clients incl. Mainline RVC / W-okada etc.** \n\n**RefineGAN:** \n - **High-Quality(?): NSF-HiFi-Gan + ParallelResBlock + AdaIN** \n- **COMPATIBILITY:ㅤThis Fork or Applio ( afaik, no rt-vc clients support it. )** \n\n**RingFormer:** \n- **Highest-Quality:ㅤA hybrid Conformer-Based Vocoder + Snake-Beta act. + RingAttention** \n- **COMPATIBILITY:ㅤThis Fork ( As for rt-vc, 'Vonovox' supports it. )** \n\n **NOTES:** \n **( RingFormer Requires min. RTX 30xx [ At least Ampere microarchitecture ] )** \n **( Each Vocoder and it's supported sample rates require appropriate pretrained models. )**",
                     choices=["HiFi-GAN"],
                     value="HiFi-GAN",
                     interactive=False,
@@ -417,12 +417,15 @@ def train_tab():
             **The provided default settings are optimal for anyone as long:**
              
             + Your dataset is a " 1 file " type ( Say, fused all smaller samples / chunks into 1 .wav file )
+            + Your dataset doesn't have peaks going crazy haywire ( tl;dr - You don't operate on source/dynamics-inconsistent samples )
             + You performed silence-truncation the right way
              
              
-            ( Generally.. you shouldn't tweak these unless you know what and why you're doing it. )
+            ( If your set has major peak / consistency issues, I recommend learning about " Peak taming compression ". )
             <br>
-            (( The only exception would be for " DC / high-pass filtering " and " Noise Reduction " ~ Read their description. ))
+            (( Generally.. you shouldn't tweak these unless you know what and why you're doing it. ))
+            <br>
+            ((( The only exception would be for " DC / high-pass filtering " and " Noise Reduction " ~ Read their description. )))
             """
             )
             with gr.Row():
@@ -436,22 +439,22 @@ def train_tab():
                 )
                 normalization_mode = gr.Radio(
                     label="Loudness Normalization",
-                    info="- **none:** Disabled \n ( Select this if the files are already normalized. ) \n- **pre:** Pre-Normalization \n ( Loudness norm. done on whole samples. )\n- **post:** Post-Normalization \n ( Loudness norm. of each sliced segment. ) \n **( Best one. )**",
-                    choices=["none", "pre", "post"],
+                    info="- **none:** Disabled \n ( Select this if the files are already normalized. ) \n- **post:** Post-Normalization \n ( Loudness norm. of each sliced segment. ) \n ",
+                    choices=["none", "post"],
                     value="post",
                     interactive=True,
                     visible=True,
                 )
                 target_lufs = gr.Number(
                     label="Target LUFS",
-                    info="Specify **target LUFS** for: \n 'pyloudnorm' loudness normalization. \n \n **If unsure what it does:** \n - **Keep it set to -20.0** \n - **Keep LUFS finder enabled.**",
+                    info="Specify **target LUFS** for: \n 'pyloudnorm' loudness normalization. \n \n **If unsure what it does:** \n - **1. Keep LUFS finder enabled.** \n - **2. Forget 'bout this box :>**",
                     value=-20.0,
                     interactive=True,
                     scale=0.9,
                 )
                 lufs_range_finder = gr.Checkbox(
                     label="LUFS range finder",
-                    info="Enable to automatically: \n - Find the LUFS **for your dataset.** \n( Just sit back and relax :> ) \n \n Disable if: \n - You **already know** what LUFS to use. \n - Your dataset **is HUGE** \n **( Unless you can afford to wait ig? )** \n ",
+                    info="Enable to automatically: \n - Find the LUFS **for your dataset.** \n( Just sit back and relax :> ) \n \n Disable ONLY IF: \n - **You know** what LUFS to use. \n ",
                     value=True,
                     interactive=True,
                     visible=True,
@@ -1012,10 +1015,10 @@ def train_tab():
                             "__type__": "update",
                         },
                         {
-                            "choices": ["HiFi-GAN", "MRF HiFi-GAN", "RefineGAN"],
+                            "choices": ["RefineGAN"],
                             "__type__": "update",
-                            "interactive": True,
-                            "value": "HiFi-GAN",
+                            "interactive": False,
+                            "value": "RefineGAN",
                         },
                         vocoder_arch_value,
                     )

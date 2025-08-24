@@ -35,8 +35,24 @@ class HubertModelWithFinalProj(HubertModel):
         super().__init__(config)
         self.final_proj = nn.Linear(config.hidden_size, config.classifier_proj_size)
 
+# Not used anymore. All logic contained in the ' preprocess.py '
+def get_loudness_and_peak(audio: np.ndarray, sample_rate: int):
+    """
+    Measures the integrated loudness and true peak of an audio signal in a single pass.
 
+    Args:
+        audio (np.ndarray): The input audio signal as a NumPy array (np.float32).
+        sample_rate (int): The sample rate of the audio.
 
+    Returns:
+        tuple: A tuple containing (integrated_loudness, true_peak).
+    """
+    meter = pyln.Meter(sample_rate)
+    loudness = meter.integrated_loudness(audio)
+    true_peak = 20 * np.log10(np.max(np.abs(audio))) # Calculate true peak manually
+    return loudness, true_peak
+
+# Not used anymore. All logic contained in the ' preprocess.py '
 def loudness_normalize_audio(audio: np.ndarray, sample_rate: int, target_lufs: float = -23.0) -> np.ndarray:
     """
     Normalizes the perceived loudness of an audio signal to a target LUFS value.

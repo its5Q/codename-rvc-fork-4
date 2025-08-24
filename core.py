@@ -433,7 +433,7 @@ def run_preprocess_script(
     clean_strength: float,
     chunk_len: float,
     overlap_len: float,
-    normalization_mode: str = "none",
+    normalization_mode: str = "post",
     loading_resampling: str = "librosa",
     target_lufs: float = -20,
     lufs_range_finder: bool = True,
@@ -1955,7 +1955,7 @@ def parse_arguments():
         "--normalization_mode",
         type=str,
         help="Normalization mode.",
-        choices=["none", "pre", "post"],
+        choices=["none", "post"],
         default="post",
         required=False,
     )

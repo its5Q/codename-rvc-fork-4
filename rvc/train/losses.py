@@ -106,10 +106,10 @@ def kl_loss(z_p, logs_q, m_p, logs_p, z_mask):
     Compute the Kullback-Leibler divergence loss.
 
     Args:
-        z_p (torch.Tensor): Latent variable z_p [b, h, t_t].
-        logs_q (torch.Tensor): Log variance of q [b, h, t_t].
-        m_p (torch.Tensor): Mean of p [b, h, t_t].
-        logs_p (torch.Tensor): Log variance of p [b, h, t_t].
+        z_p (torch.Tensor): Sampled latent variable transformed by the flow [b, h, t_t].
+        logs_q (torch.Tensor): Log variance of the posterior distribution q [b, h, t_t].
+        m_p (torch.Tensor): Mean of the prior distribution p [b, h, t_t].
+        logs_p (torch.Tensor): Log variance of the prior distribution p [b, h, t_t].
         z_mask (torch.Tensor): Mask for the latent variables [b, h, t_t].
     """
     kl = logs_p - logs_q - 0.5 + 0.5 * ((z_p - m_p) ** 2) * torch.exp(-2 * logs_p)
