@@ -62,6 +62,8 @@
  
 - Support for 'Spin' embedder.
  
+- Support for LoRA finetuning ( Approach identical to GPT-SoVITS ).
+ 
 - Ability to choose an optimizer.  ` ( Currently supporting: AdamW, AdamW_BF16, RAdam, Ranger21, DiffGrad, Prodigy ) `
  
 - (EXP) Double-update strategy for Discriminator.
