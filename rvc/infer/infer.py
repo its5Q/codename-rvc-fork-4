@@ -35,6 +35,8 @@ from rvc.lib.tools.split_audio import process_audio, merge_audio
 from rvc.lib.algorithm.synthesizers import Synthesizer
 from rvc.configs.config import Config
 
+from peft import LoraConfig, get_peft_model
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("faiss").setLevel(logging.WARNING)
@@ -575,6 +577,18 @@ class VoiceConverter:
                     text_enc_hidden_dim=self.text_enc_hidden_dim,
                     vocoder=self.vocoder,
                 )
+
+            if "lora_rank" in self.active_cpt:
+                lora_rank = self.active_cpt["lora_rank"]
+                print(f"    ██████  LoRA model detected with rank: {lora_rank}")
+
+                lora_config = LoraConfig(
+                    target_modules=["conv_q", "conv_k", "conv_v", "conv_o"],
+                    r=lora_rank,
+                    lora_alpha=lora_rank,
+                    init_lora_weights=False,
+                )
+                self.net_g.enc_p = get_peft_model(self.net_g.enc_p, lora_config)
 
             del self.net_g.enc_q
             self.net_g.load_state_dict(self.active_cpt["weight"], strict=False)

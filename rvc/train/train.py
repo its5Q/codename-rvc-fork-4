@@ -65,6 +65,7 @@ from losses import (
     phase_loss,
 
 )
+
 from mel_processing import (
     mel_spectrogram_torch,
     spec_to_mel_torch,
@@ -74,11 +75,11 @@ from mel_processing import (
 from rvc.train.process.extract_model import extract_model
 from rvc.lib.algorithm import commons
 from rvc.train.utils import replace_keys_in_dict
-from pesq import pesq
+
 import torch_optimizer
 import auraloss
-
-#from rvc.lib.algorithm.conformer.stft import TorchSTFT # VERIFIED
+from pesq import pesq
+from peft import LoraConfig, get_peft_model
 
 # Parse command line arguments start region ===========================
 
@@ -108,8 +109,10 @@ lr_scheduler = sys.argv[23]
 exp_decay_gamma = float(sys.argv[24])
 use_validation = strtobool(sys.argv[25])
 double_d_update = strtobool(sys.argv[26])
-use_custom_lr = strtobool(sys.argv[27])
-custom_lr_g, custom_lr_d = (float(sys.argv[28]), float(sys.argv[29])) if use_custom_lr else (None, None)
+use_lora = bool(strtobool(sys.argv[27]))
+lora_rank = int(sys.argv[28])
+use_custom_lr = strtobool(sys.argv[29])
+custom_lr_g, custom_lr_d = (float(sys.argv[30]), float(sys.argv[31])) if use_custom_lr else (None, None)
 assert not use_custom_lr or (custom_lr_g and custom_lr_d), "Invalid custom LR values."
 
 # Parse command line arguments end region ===========================
@@ -146,6 +149,7 @@ d_updates_per_step = 2 if double_d_update else 1
 warmup_completed = False
 from_scratch = False
 use_lr_scheduler = lr_scheduler != "none"
+lora_rank = lora_rank if use_lora else None
 
 # Torch backends config
 torch.backends.cuda.matmul.allow_tf32 = use_tf32
@@ -154,7 +158,6 @@ torch.backends.cudnn.benchmark = use_benchmark
 torch.backends.cudnn.deterministic = use_deterministic
 
 # Globals ( tweakable )
-
 randomized = True
 benchmark_mode = False
 enable_persistent_workers = True
@@ -162,7 +165,7 @@ debug_shapes = False
 
 # EXPERIMENTAL
 c_stft = 21.0 # 18.0
-use_triple_disc = False
+
 
 import logging
 logging.getLogger("torch").setLevel(logging.ERROR)
@@ -265,6 +268,12 @@ def wave_to_mel(waveform, half):
 
     return mel_spec
 
+def small_model_naming(model_name, epoch, global_step, lora_rank=None):
+    if use_lora and lora_rank:
+        return f"{model_name}_{epoch}e_{global_step}s_{lora_rank}rank.pth"
+    else:
+        return f"{model_name}_{epoch}e_{global_step}s.pth"
+
 # --------------------------   Custom functions End here   --------------------------
 
 
@@ -293,13 +302,15 @@ def verify_remap_checkpoint(checkpoint_path, model, architecture):
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     checkpoint_state_dict = checkpoint["model"]
     print(f"Verifying checkpoint for selected architecture: {architecture}")
-    
+
+    strict_mode = not use_lora
+
     try:
         if architecture == "RVC":
             if hasattr(model, "module"):
-                model.module.load_state_dict(checkpoint_state_dict)
+                model.module.load_state_dict(checkpoint_state_dict, strict=strict_mode)
             else:
-                model.load_state_dict(checkpoint_state_dict)
+                model.load_state_dict(checkpoint_state_dict, strict=strict_mode)
         elif architecture in ["Fork", "Fork/Applio"]:
             print("Non-RVC architecture pretrains detected. Checking for old keys...")
             
@@ -324,9 +335,9 @@ def verify_remap_checkpoint(checkpoint_path, model, architecture):
             
             # Load the state dictionary after remapping
             if hasattr(model, "module"):
-                model.module.load_state_dict(checkpoint_state_dict)
+                model.module.load_state_dict(checkpoint_state_dict, strict=strict_mode)
             else:
-                model.load_state_dict(checkpoint_state_dict)
+                model.load_state_dict(checkpoint_state_dict, strict=strict_mode)
 
     except RuntimeError as e:
         error_message = str(e)
@@ -475,7 +486,7 @@ def run(
         config (object): Configuration object containing training parameters.
         device (torch.device): The device to use for training (CPU or GPU).
     """
-    global global_step, warmup_completed, optimizer_choice, from_scratch
+    global global_step, warmup_completed, optimizer_choice, from_scratch, lora_rank
 
 
     if 'warmup_completed' not in globals():
@@ -624,7 +635,6 @@ def run(
     # Embedder / spk_dim alignment
     embedder_name = "contentvec" # Default embedder
     spk_dim = config.model.spk_embed_dim  # 109 default speakers
-
     try:
         with open(model_info_path, "r") as f:
             model_info = json.load(f)
@@ -636,14 +646,12 @@ def run(
     # Try to load speaker dim from latest checkpoint or pretrainG
     try:
         last_g = latest_checkpoint_path(experiment_dir, "G_*.pth")
-        chk_path = (
-            last_g if last_g else (pretrainG if pretrainG not in ("", "None") else None)
-        )
-
+        chk_path = (last_g if last_g else (pretrainG if pretrainG not in ("", "None") else None))
         if chk_path:
             ckpt = torch.load(chk_path, map_location="cpu", weights_only=True)
             spk_dim = ckpt["model"]["emb_g.weight"].shape[0]
             del ckpt
+
     except Exception as e:
         print(f"Failed to load checkpoint: {e}. Using default number of speakers.")
 
@@ -651,6 +659,12 @@ def run(
     print(f"    ██████  Initializing the generator with: {spk_dim} speakers.")
     config.model.spk_embed_dim = spk_dim
 
+
+    # Finetuning mode
+    if use_lora:
+        print(f"    ██████  Finetuning mode: LoRA with rank: {lora_rank}")
+    else:
+        print(f"    ██████  Finetuning mode: Full")
 
     # Initialize generator
     from rvc.lib.algorithm.synthesizers import Synthesizer
@@ -678,7 +692,6 @@ def run(
         )
 
     # Moving models to device
-
     if torch.cuda.is_available():
         net_g = net_g.cuda(device_id)
         net_d = net_d.cuda(device_id)
@@ -719,7 +732,6 @@ def run(
         weight_decay= 0.0, # 0.001,   # tried: 0.0001, 0.00001  ( default: # 0.0,
         use_kahan_summation=True,
     )
-
 
     if optimizer_choice == "Ranger21":
         from rvc.train.custom_optimizers.ranger21 import Ranger21
@@ -773,18 +785,6 @@ def run(
         optim_g = diffgrad(net_g.parameters(), **common_args_g)
         optim_d = diffgrad(net_d.parameters(), **common_args_d)
 
-#        if debug_shapes:
-#            param_ids = set(id(p) for p in net_d.parameters() if p.requires_grad)
-#            optim_param_ids = set(id(p) for group in optim_d.param_groups for p in group['params'])
-#
-#            missing = param_ids - optim_param_ids
-#            print(f"Params missing in optimizer: {len(missing)} out of {len(param_ids)}")
-#            if missing:
-#                print("Some params missing!")
-#            else:
-#            else:
-#                print("All params present in optimizer.")
-
     '''
     - Template for adding custom optims:
 
@@ -833,28 +833,37 @@ def run(
         print(" //// ERROR //// CHOSEN SPECTRAL LOSS IS UNDEFINED / UNSUPPORTED. EXITING.")
         sys.exit(1)
 
-
     # Wrap models with DDP for multi-gpu processing
     if n_gpus > 1 and device.type == "cuda":
         net_g = DDP(net_g, device_ids=[device_id]) # find_unused_parameters=True)
         net_d = DDP(net_d, device_ids=[device_id]) # find_unused_parameters=True)
 
-    # If available, resuming from: D_*, G_* checkpoints
+    # If available, resuming from:  D_* and G_* checkpoints
     try:
         print("    ██████  Starting the training ...")
-        # Discriminator
-        _, _, _, epoch_str = load_checkpoint(
-            architecture, latest_checkpoint_path(experiment_dir, "D_*.pth"), net_d, optim_d
-        )
-        # Generator
-        _, _, _, epoch_str = load_checkpoint(
-            architecture, latest_checkpoint_path(experiment_dir, "G_*.pth"), net_g, optim_g
-        )
 
-        epoch_str += 1
-        global_step = (epoch_str - 1) * len(train_loader)
-        print(f"[RESUMING] (G) & (D) at global_step: {global_step} and epoch count: {epoch_str - 1}")
-    except:
+        g_checkpoint_path = latest_checkpoint_path(experiment_dir, "G_*.pth")
+        d_checkpoint_path = latest_checkpoint_path(experiment_dir, "D_*.pth")
+
+        if g_checkpoint_path and d_checkpoint_path:
+            if use_lora:
+                lora_config = LoraConfig(
+                    target_modules=["conv_q", "conv_k", "conv_v", "conv_o"],
+                    r=lora_rank,
+                    lora_alpha=lora_rank,
+                    init_lora_weights=False,
+                )
+                net_g.enc_p = get_peft_model(net_g.enc_p, lora_config)
+
+            _, _, _, epoch_str = load_checkpoint(architecture, g_checkpoint_path, net_g, optim_g)
+            _, _, _, epoch_str = load_checkpoint(architecture, d_checkpoint_path, net_d, optim_d)
+
+            epoch_str += 1
+            global_step = (epoch_str - 1) * len(train_loader)
+            print(f"[RESUMING] (G) & (D) at global_step: {global_step} and epoch count: {epoch_str - 1}")
+        else:
+            raise FileNotFoundError("No checkpoints found.")
+    except FileNotFoundError:
     # If no checkpoints are available, using the Pretrains directly
         epoch_str = 1
         global_step = 0
@@ -865,19 +874,27 @@ def run(
                 print(f"Loading pretrained (G) '{pretrainG}'")
             verify_remap_checkpoint(pretrainG, net_g, architecture)
 
+            # Apply LoRA if use_lora is set to True
+            if use_lora:
+                lora_config = LoraConfig(
+                    target_modules=["conv_q", "conv_k", "conv_v", "conv_o"],
+                    r=lora_rank,
+                    lora_alpha=lora_rank,
+                    init_lora_weights=True,
+                )
+                net_g.enc_p = get_peft_model(net_g.enc_p, lora_config)
+
         # Loading the pretrained Discriminator model
         if pretrainD != "" and pretrainD != "None":
             if rank == 0:
                 print(f"Loading pretrained (D) '{pretrainD}'")
             verify_remap_checkpoint(pretrainD, net_d, architecture)
 
-
     # Check if the training is ' from scratch ' and set appropriate flag
     if (pretrainG in ["", "None"]) and (pretrainD in ["", "None"]):
         from_scratch = True
         if rank == 0:
             print("    ██████  No pretrains used: Average loss disabled!")
-
 
     # Initialize the warmup scheduler only if `use_warmup` is True
     if use_warmup:
@@ -1059,7 +1076,7 @@ def training_loop(
         cache (list): List to cache data in GPU memory.
         use_cpu (bool): Whether to use CPU for training.
     """
-    global global_step, warmup_completed
+    global global_step, warmup_completed, dynamic_c_kl
 
     net_g, net_d = nets
     optim_g, optim_d = optims
@@ -1214,7 +1231,7 @@ def training_loop(
                 elif spectral_loss == "Multi-Scale Mel Loss":
                     loss_mel = fn_spectral_loss(y, y_hat) * config.train.c_mel / 3.0
                 elif spectral_loss == "Multi-Res STFT Loss":
-                    loss_mel = fn_spectral_loss(y_hat, y) * c_stft
+                    loss_mel = fn_spectral_loss(y_hat.float(), y.float()) * c_stft
 
                 # Feature Matching loss
                 loss_fm = feature_loss(fmap_r, fmap_g)
@@ -1502,22 +1519,18 @@ def training_loop(
             )
             # Save small weight model
             if custom_save_every_weights:
-                model_add.append(
-                    os.path.join(
-                        experiment_dir, f"{model_name}_{epoch}e_{global_step}s.pth"
-                    )
-                )
+                weight_model_name = small_model_naming(model_name, epoch, global_step, lora_rank)
+                model_add.append(os.path.join(experiment_dir, weight_model_name))
+
         # Check completion
         if epoch >= custom_total_epoch:
             print(
                 f"Training has been successfully completed with {epoch} epoch, {global_step} steps and {round(loss_gen_total.item(), 3)} loss gen."
             )
             # Final model
-            model_add.append(
-                os.path.join(
-                    experiment_dir, f"{model_name}_{epoch}e_{global_step}s.pth"
-                )
-            )
+            weight_model_name = small_model_naming(model_name, epoch, global_step, lora_rank)
+            model_add.append(os.path.join(experiment_dir, weight_model_name))
+
             done = True
 
         if model_add:
@@ -1538,6 +1551,8 @@ def training_loop(
                         hps=hps,
                         vocoder=vocoder,
                         architecture=architecture,
+                        use_lora=use_lora,
+                        lora_rank=lora_rank,
                     )
         if done:
             # Clean-up process IDs from memory

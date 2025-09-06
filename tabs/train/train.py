@@ -692,6 +692,20 @@ def train_tab():
                         value=auto_enable_checkpointing,
                         interactive=True,
                     )
+                    lora_finetuning = gr.Checkbox(
+                        label="LoRA finetuning",
+                        info="LoRA ( Low-Rank Adaptation ) finetuning. \n Potentially faster results with much smaller TextEncoder overfitting risk.",
+                        value=False,
+                        interactive=True,
+                    )
+                    lora_rank = gr.Radio(
+                        label="Rank for LoRA",
+                        info="**Higher Rank allows the model to capture more detail and complexity from your dataset.** \n Generally, **32 is a decent starting point** ( or **16 for smaller / less complex datasets** ). \n **In a short: Rank directly controls LoRA adapter's capacity.**",
+                        choices=[16, 32, 64, 128, 256],
+                        value=32,
+                        visible=False,
+                        interactive=True,
+                    )
                 with gr.Column():
                     use_tf32 = gr.Checkbox(
                         label="use 'TF32' precision",
@@ -899,6 +913,8 @@ def train_tab():
                     exp_decay_gamma,
                     use_validation,
                     double_d_update,
+                    lora_finetuning,
+                    lora_rank,
                     use_custom_lr,
                     custom_lr_g,
                     custom_lr_d,
@@ -987,6 +1003,9 @@ def train_tab():
                         "visible": pretrained,
                         "__type__": "update",
                     }
+
+            def toggle_lora_rank(lora_finetuning):
+                return gr.update(visible=lora_finetuning)
 
             def download_prerequisites():
                     gr.Info(
@@ -1105,6 +1124,11 @@ def train_tab():
                 fn=toggle_pretrained,
                 inputs=[pretrained, custom_pretrained],
                 outputs=[custom_pretrained, pretrained_custom_settings],
+            )
+            lora_finetuning.change(
+                fn=toggle_lora_rank,
+                inputs=[lora_finetuning],
+                outputs=[lora_rank],
             )
             custom_pretrained.change(
                 fn=toggle_visible,

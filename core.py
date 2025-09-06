@@ -537,6 +537,8 @@ def run_train_script(
     exp_decay_gamma: str = "0.999875",
     use_validation: bool = True,
     double_d_update: bool = False,
+    lora_finetuning: bool = False,
+    lora_rank: int = 32,
     use_custom_lr: bool = False,
     custom_lr_g: float = 1e-4,
     custom_lr_d: float = 1e-4,
@@ -593,6 +595,8 @@ def run_train_script(
                 exp_decay_gamma,
                 use_validation,
                 double_d_update,
+                lora_finetuning,
+                lora_rank,
                 use_custom_lr,
                 custom_lr_g,
                 custom_lr_d
@@ -2259,6 +2263,20 @@ def parse_arguments():
         default=False,
     )
     train_parser.add_argument(
+        "--lora_finetuning",
+        type=lambda x: bool(strtobool(x)),
+        choices=[True, False],
+        help="Enables LoRA finetuning.",
+        default=False,
+    )
+    train_parser.add_argument(
+        "--lora_rank",
+        type=int,
+        help="Rank for LoRA finetuning",
+        choices=[16, 32, 64, 128, 256],
+        default=32,
+    )
+    train_parser.add_argument(
         "--use_custom_lr",
         type=lambda x: bool(strtobool(x)),
         choices=[True, False],
@@ -2607,6 +2625,8 @@ def main():
                 exp_decay_gamma=args.exp_decay_gamma,
                 use_validation=args.use_validation,
                 double_d_update=args.double_d_update,
+                lora_finetuning=args.lora_finetuning,
+                lora_rank=args.lora_rank,
                 use_custom_lr=args.use_custom_lr,
                 custom_lr_g=args.custom_lr_g,
                 custom_lr_d=args.custom_lr_d,

@@ -22,49 +22,36 @@ from rvc.lib.algorithm.conformer.conformer import Conformer
 from rvc.lib.algorithm.commons import init_weights
 from rvc.lib.algorithm.conformer.stft import TorchSTFT
 
+# DEBUG
+import torchaudio
+import sys
 
-
-class SineGen(torch.nn.Module):
-    """
-    Definition of sine generator
-    Args:
-        samp_rate: sampling rate in Hz
-        harmonic_num: number of harmonic overtones (default 0)
-        sine_amp: amplitude of sine-wavefrom (default 0.1)
-        noise_std: std of Gaussian noise (default 0.003)
-        voiced_thoreshold: F0 threshold for U/V classification (default 0)
-    """
+class SineGenerator(torch.nn.Module):
     def __init__(
         self,
-        samp_rate,
-        upsample_scale,
-        harmonic_num=0,
-        sine_amp=0.1,
-        noise_std=0.003,
-        voiced_threshold=0,
-        apply_modulo=False,
-        double_precision=False,
-        early_modulo=False
+        sample_rate: int,
+        harmonic_num: int = 0,
+        sine_amp: float = 0.1,
+        noise_std: float = 0.003,
+        voiced_threshold: int = 0,
+        f0_upsample_factor: int = 1,
     ):
-        super(SineGen, self).__init__()
+        super(SineGenerator, self).__init__()
 
+        self.sampling_rate = sample_rate
+        self.harmonic_num = harmonic_num
         self.sine_amp = sine_amp
         self.noise_std = noise_std
-        self.harmonic_num = harmonic_num
-        self.dim = self.harmonic_num + 1
-        self.sampling_rate = samp_rate
         self.voiced_threshold = voiced_threshold
-        self.upsample_scale = upsample_scale
-        self.apply_modulo = apply_modulo
-        self.double_precision = double_precision
-        self.early_modulo = early_modulo
+        self.f0_upsample_factor = f0_upsample_factor
+        self.dim = self.harmonic_num + 1
 
-    def _f02uv(self, f0):
-        # generate uv signal
-        uv = (f0 > self.voiced_threshold).type(torch.float32)
-        return uv
+    def _f0_to_voiced_mask(self, f0):
+        # generate voiced_mask signal
+        voiced_mask = (f0 > self.voiced_threshold).type(torch.float32)
+        return voiced_mask
 
-    def _f02sine(self, f0_values):
+    def _f0_to_sines(self, f0_values):
         """ f0_values: (batchsize, length, dim)
             where dim indicates fundamental tone and overtones
         """
@@ -73,193 +60,94 @@ class SineGen(torch.nn.Module):
         rad_values = (f0_values / self.sampling_rate) % 1
 
         # initial phase noise (no noise for fundamental component)
-        rand_ini = torch.rand(f0_values.shape[0], f0_values.shape[2], \
-                              device=f0_values.device)
+        rand_ini = torch.rand(f0_values.shape[0], f0_values.shape[2], device=f0_values.device)
         rand_ini[:, 0] = 0
         rad_values[:, 0, :] = rad_values[:, 0, :] + rand_ini
 
         # instantanouse phase sine[t] = sin(2*pi \sum_i=1 ^{t} rad)
         rad_values = torch.nn.functional.interpolate(
             rad_values.transpose(1, 2), 
-            scale_factor=1/self.upsample_scale, 
+            scale_factor=1/self.f0_upsample_factor, 
             mode="linear"
         ).transpose(1, 2)
 
-        if not self.apply_modulo:
-            phase = torch.cumsum(rad_values, dim=1) * 2 * np.pi
-            phase = torch.nn.functional.interpolate(
-                phase.transpose(1, 2) * self.upsample_scale, 
-                scale_factor=self.upsample_scale,
-                mode="linear"
-            ).transpose(1, 2)
+        phase = torch.cumsum(rad_values, dim=1) * 2 * np.pi
+        phase = torch.nn.functional.interpolate(
+            phase.transpose(1, 2) * self.f0_upsample_factor, 
+            scale_factor=self.f0_upsample_factor,
+            mode="linear"
+        ).transpose(1, 2)
 
-            sines = torch.sin(phase)
-        else:  # Modulo on fundamental only, harmonics = multiples without modulo
-            if not self.early_modulo: # For late modulo style
-                # Accumulate fundamental phase (first harmonic only), shape (batch, length)
-                if self.double_precision:
-                    # cast to double just for the sum …
-                    fund_rad = rad_values[:, :, 0].double()
-                    fund_phase_cum = torch.cumsum(fund_rad, dim=1)
-                    fund_phase_cum = fund_phase_cum.float()
-                else:
-                    fund_rad = rad_values[:, :, 0]  # fundamental harmonic cycles per step
-                    fund_phase_cum = torch.cumsum(fund_rad, dim=1)  # cumulative phase in cycles
+        sines = torch.sin(phase)
 
-                # interpolate upsampling if needed
-                fund_phase_upsampled = torch.nn.functional.interpolate(
-                    (fund_phase_cum * 2 * np.pi).unsqueeze(2).transpose(1, 2) * self.upsample_scale,
-                    scale_factor=self.upsample_scale,
-                    mode="linear"
-                ).transpose(1, 2)  # shape (batch, length, 1), radians
-
-                # wrap fundamental phase into [0, 2pi)
-                fund_phase_wrapped = torch.fmod(fund_phase_upsampled, 2 * np.pi)
-
-                # generate harmonics by multiplying fundamental phase (no modulo for harmonics)
-                harmonics = torch.stack(
-                    [fund_phase_wrapped[:, :, 0] * (k + 1) for k in range(self.dim)],
-                    dim=2
-                )  # shape (batch, length, dim)
-
-                sines = torch.sin(harmonics)
-            else:
-                # --- EARLY‑MODULO PHASE ACCUMULATION (drift‑free, zero delay) ---
-                # rad_values: [B, T, dim]; we only need the fundamental channel for carry
-                fund_cycle = rad_values[:, :, 0].unsqueeze(-1)  # [B, T, 1] cycles per original sample
-
-                # expand to per‑tick increments: [B, T, upsample_scale] cycles per tick
-                idx = (torch.arange(self.upsample_scale, device=rad_values.device)
-                    .view(1,1,-1).float() + 1)  # [1,1,U]
-                phase_inc = fund_cycle * idx  # broadcast → per‑tick incremental cycles
-
-                # compute the carry‑over remainder from each frame (last tick of each block)
-                #    wrap it into [–0.5, +0.5) cycles so cumsum never drifts beyond one cycle
-                rem = torch.fmod(phase_inc[:, :-1, -1:] + 0.5, 1.0) - 0.5  # [B, T-1, 1]
-
-                # accumulate and wrap carry every frame
-                cum_rem = torch.fmod(rem.cumsum(dim=1), 1.0)           # [B, T-1, 1]
-                cum_rem = torch.nn.functional.pad(cum_rem, (0,0,1,0))  # pad to [B, T, 1]
-
-                # add carry to each tick → true global phase per tick
-                global_phase = phase_inc + cum_rem                    # [B, T, U] cycles
-
-                # scale for harmonics and convert to radians
-                k_idx = (torch.arange(1, self.dim+1, device=rad_values.device)
-                        .view(1,1,-1).float())                          # [1,1,dim]
-                harmonics = global_phase.unsqueeze(-1) * k_idx        # [B, T, U, dim]
-                harmonics = harmonics * (2 * math.pi)                 # to radians
-
-                # reshape to [B, T*U, dim] and take sin
-                harmonics = harmonics.reshape(
-                    rad_values.shape[0],
-                    rad_values.shape[1] * self.upsample_scale,
-                    self.dim
-                )
-                sines = torch.sin(harmonics)
         return sines
 
     def forward(self, f0):
-        """ sine_tensor, uv = forward(f0)
-        input F0: tensor(batchsize=1, length, dim=1)
-        f0 for unvoiced steps should be 0
-        output sine_tensor: tensor(batchsize=1, length, dim)
-        output uv: tensor(batchsize=1, length, 1)
-        """
-        with torch.no_grad():
-            # Disabled mixed precision to avoid bf16 numerical errors in phase calculations
-            with autocast(device_type="cuda", enabled=False):
-                f0_buf = torch.zeros(
-                    f0.shape[0],
-                    f0.shape[1],
-                    self.dim,
-                    device=f0.device
-                )
-                # fundamental component
-                fn = torch.multiply(f0, torch.FloatTensor([[range(1, self.harmonic_num + 2)]]).to(f0.device))
+        with autocast(device_type="cuda", enabled=False):
+            f0_buf = torch.zeros(
+                f0.shape[0],
+                f0.shape[1],
+                self.dim,
+                device=f0.device
+            )
+            # fundamental component
+            fn = torch.multiply(f0, torch.FloatTensor([[range(1, self.harmonic_num + 2)]]).to(f0.device))
 
-                # generate sine waveforms
-                sine_waves = self._f02sine(fn) * self.sine_amp
+            # generate sine waveforms
+            sine_waves = self._f0_to_sines(fn) * self.sine_amp
 
-                # generate uv signal
-                uv = self._f02uv(f0)
+            # generate voiced_mask signal
+            voiced_mask = self._f0_to_voiced_mask(f0)
 
-                # noise: for unvoiced should be similar to sine_amp
-                noise_amp = uv * self.noise_std + (1 - uv) * self.sine_amp / 3
-                noise = noise_amp * torch.randn_like(sine_waves)
+            # noise: for unvoiced should be similar to sine_amp
+            noise_amp = voiced_mask * self.noise_std + (1 - voiced_mask) * self.sine_amp / 3
+            noise = noise_amp * torch.randn_like(sine_waves)
 
-                # first: set the unvoiced part to 0 by uv
-                # then: additive noise
-                sine_waves = sine_waves * uv + noise
-            return sine_waves, uv, noise
+            # first: set the unvoiced part to 0 by voiced_mask
+            # then: additive noise
+            sine_waves = sine_waves * voiced_mask + noise
+
+            return sine_waves
 
 class SourceModuleHnNSF(torch.nn.Module):
-    """
-    Source Module for generating harmonic and noise components for audio synthesis.
-
-    This module generates a harmonic source signal using sine waves and adds
-    optional noise. It's often used in neural vocoders as a source of excitation.
-
-    Args:
-        sample_rate (int): Sampling rate of the audio in Hz.
-        harmonic_num (int, optional): Number of harmonic overtones to generate above the fundamental frequency (F0). Defaults to 0.
-        sine_amp (float, optional): Amplitude of the sine wave components. Defaults to 0.1.
-        add_noise_std (float, optional): Standard deviation of the additive white Gaussian noise. Defaults to 0.003.
-        voiced_threshold (float, optional): Threshold for the fundamental frequency (F0) to determine if a frame is voiced. If F0 is below this threshold, it's considered unvoiced. Defaults to 0.
-    """
     def __init__(
         self,
         sample_rate: int,
-        upsample_scale: int,
         harmonic_num: int = 0,
         sine_amp: float = 0.1,
         add_noise_std: float = 0.003,
-        voiced_threshold: float = 0,
-        apply_modulo: bool = False,
-        double_precision: bool = False,
-        early_modulo: bool = False
+        voiced_threshold: int = 0,
+        f0_upsample_factor: int = 1,
     ):
         super(SourceModuleHnNSF, self).__init__()
 
-        self.sine_amp = sine_amp
-        self.noise_std = add_noise_std
-
         # to produce sine waveforms
-        self.l_sin_gen = SineGen(
-            samp_rate=sample_rate,
-            upsample_scale=upsample_scale,
-            harmonic_num=harmonic_num,
-            sine_amp=sine_amp,
-            noise_std=add_noise_std,
-            voiced_threshold=voiced_threshold,
-            apply_modulo=apply_modulo,
-            double_precision=double_precision,
-            early_modulo=early_modulo
+        self.l_sin_gen = SineGenerator(
+            sample_rate,
+            harmonic_num,
+            sine_amp,
+            add_noise_std,
+            voiced_threshold,
+            f0_upsample_factor,
         )
 
         # to merge source harmonics into a single excitation
         self.l_linear = torch.nn.Linear(harmonic_num + 1, 1)
         self.l_tanh = torch.nn.Tanh()
 
-    def forward(self, x):
-        """
-        Sine_source, noise_source = SourceModuleHnNSF(F0_sampled)
-        F0_sampled (batchsize, length, 1)
-        Sine_source (batchsize, length, 1)
-        noise_source (batchsize, length 1)
-        """
+    def forward(self, f0: torch.Tensor):
         # source for harmonic branch
+        with torch.no_grad():
+            sine_wavs = self.l_sin_gen(f0)
+
+        # Merge of the harmonics
         with autocast(device_type="cuda", enabled=False):
-            with torch.no_grad():
-                sine_wavs, uv, _ = self.l_sin_gen(x)
             sine_merge = self.l_tanh(self.l_linear(sine_wavs))
 
-            # source for noise branch, in the same shape as uv
-            noise = torch.randn_like(uv) * self.sine_amp / 3
+        return sine_merge
 
-            return sine_merge, noise, uv
 
-class RingFormerGenerator(torch.nn.Module):
+class RingFormerGenerator(nn.Module):
     def __init__(
         self,
         initial_channel, # 192
@@ -272,19 +160,18 @@ class RingFormerGenerator(torch.nn.Module):
         gen_istft_hop_size, # 24khz: 15, 48khz: 30
         gin_channels, # 256
         sr, # 24000, 48000, 
-        harmonic_num = 8, # NFS Patch
+        harmonic_num = 8,
         checkpointing: bool = False,
     ):
         super(RingFormerGenerator, self).__init__()
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
+
         self.gen_istft_n_fft = gen_istft_n_fft
         self.gen_istft_hop_size = gen_istft_hop_size
+
         self.checkpointing = checkpointing
-
-        #self.conv_pre = Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3)
         self.conv_pre = weight_norm(Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3))
-
 
         '''
         Available ResBlock types:
@@ -295,24 +182,20 @@ class RingFormerGenerator(torch.nn.Module):
         '''
         ResBlock_Type = ResBlock_SnakeBeta
 
-        self.m_source = SourceModuleHnNSF(
-            sample_rate=sr,
-            upsample_scale=math.prod(upsample_rates) * gen_istft_hop_size,
-            harmonic_num=harmonic_num,
-            voiced_threshold=0,
-            apply_modulo=False,
-            double_precision=False,
-            early_modulo=False,
-        )
 
-        self.f0_upsamp = torch.nn.Upsample(
-            scale_factor=math.prod(upsample_rates) * self.gen_istft_hop_size
+        f0_upsample_factor = math.prod(upsample_rates) * gen_istft_hop_size
+
+        self.f0_upsampler = torch.nn.Upsample(scale_factor = f0_upsample_factor)
+
+        self.m_source = SourceModuleHnNSF(
+            sample_rate = sr,
+            harmonic_num = harmonic_num,
+            voiced_threshold = 0,
+            f0_upsample_factor = f0_upsample_factor,
         )
 
         self.noise_convs = nn.ModuleList()
-
         self.noise_res = nn.ModuleList()
-
         self.ups = nn.ModuleList()
 
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
@@ -335,7 +218,6 @@ class RingFormerGenerator(torch.nn.Module):
                 kernel = stride_f0 * 2 - stride_f0 % 2
                 padding = 0 if stride_f0 == 1 else (kernel - stride_f0) // 2
 
-
                 self.noise_convs.append(Conv1d(
                     self.gen_istft_n_fft + 2, c_cur, kernel_size=kernel, stride=stride_f0, padding=padding))
 
@@ -355,7 +237,6 @@ class RingFormerGenerator(torch.nn.Module):
             for j, (k, d) in enumerate(
                 zip(resblock_kernel_sizes, resblock_dilation_sizes)):
                 self.resblocks.append(ResBlock_Type(ch, k, d))
-
 
         self.conformers = nn.ModuleList()
         self.post_n_fft = self.gen_istft_n_fft
@@ -378,10 +259,9 @@ class RingFormerGenerator(torch.nn.Module):
                 )
             )
 
-
         self.ups.apply(init_weights)
         self.conv_post.apply(init_weights)
-        self.reflection_pad = torch.nn.ReflectionPad1d((1, 0))
+        self.reflection_pad = nn.ReflectionPad1d((1, 0))
 
         self.stft = TorchSTFT(
             "cuda",
@@ -390,64 +270,42 @@ class RingFormerGenerator(torch.nn.Module):
             win_length=self.gen_istft_n_fft
         )
 
-
         if gin_channels != 0:
             self.cond = Conv1d(gin_channels, upsample_initial_channel, 1)
 
-
     def forward(self, x: torch.Tensor, f0: torch.Tensor, g: Optional[torch.Tensor] = None):
 
-        debug_shapes = False
+        f0 = self.f0_upsampler(f0[:, None]).transpose(1, 2)
 
-        if debug_shapes:
-            print(f"[DEC forward] Input x shape (latent): {x.shape}")  # [batch, channels, time]
-            print(f"[DEC forward] Input f0 shape: {f0.shape}")
+        har_source = self.m_source(f0)
+        har_source = har_source.squeeze(-1)
 
-        #f0, _, _ = self.F0_model(x.unsqueeze(1))
+        har_spec, har_phase = self.stft.transform(har_source)
 
-        if len(f0.shape) == 1:
-            f0 = f0.unsqueeze(0)
-
-        f0 = self.f0_upsamp(f0[:, None]).transpose(1, 2)  # bs,n,t
-        if debug_shapes:
-            print(f"[DEC forward] Input f0 shape after f0_upsamp: {f0.shape}")
-
-        har_source, _, _ = self.m_source(f0)
-        har_source = har_source.transpose(1, 2).squeeze(1)
-
-        if debug_shapes:
-            print(f"[DEC forward] Shape of Latent {x.shape}") 
-            print(f"[DEC forward] Shape of f0 {f0.shape}") 
-            print(f"[DEC forward] Shape of har_source {har_source.shape}") 
-
-        har_spec, har_phase = self.stft.transform(har_source) # NSF Patch
-        har = torch.cat([har_spec, har_phase], dim=1) # NSF Patch
+        har = torch.cat([har_spec, har_phase], dim=1)
 
         x = self.conv_pre(x)
 
-        if g is not None and self.cond is not None:
+        if g is not None:
             x = x + self.cond(g)
 
         for i in range(self.num_upsamples):
-
             x = x + (1 / self.alphas[i]) * (torch.sin(self.alphas[i] * x) ** 2)
+
             x = einops.rearrange(x, 'b f t -> b t f')
-
             x = self.conformers[i](x)
-
             x = einops.rearrange(x, 'b t f -> b f t')
 
-            # x = F.leaky_relu(x, LRELU_SLOPE)
             x_source = self.noise_convs[i](har)
             x_source = self.noise_res[i](x_source)
 
-
             if self.training and self.checkpointing:
                 x = checkpoint(self.ups[i], x, use_reentrant=False)
+
                 if i == self.num_upsamples - 1:
                     x = self.reflection_pad(x)
-                x = x + x_source
 
+                x = x + x_source
 
                 xs = None
                 for j in range(self.num_kernels):
@@ -457,11 +315,11 @@ class RingFormerGenerator(torch.nn.Module):
                 x = xs / self.num_kernels
             else:
                 x = self.ups[i](x)
+ 
                 if i == self.num_upsamples - 1:
                     x = self.reflection_pad(x)
 
                 x = x + x_source
-    
 
                 xs = None
                 for j in range(self.num_kernels):
@@ -475,15 +333,13 @@ class RingFormerGenerator(torch.nn.Module):
 
         x = self.conv_post(x)
 
-        spec = torch.exp(x[:, :self.post_n_fft // 2 + 1, :])
-        phase = torch.sin(x[:, self.post_n_fft // 2 + 1:, :])
-
+        spec = torch.exp(x[:, :self.post_n_fft // 2 + 1, :]).to(x.device)
+        phase = torch.sin(x[:, self.post_n_fft // 2 + 1:, :]).to(x.device)
         out = self.stft.inverse(spec, phase).to(x.device)
 
         return out, spec, phase
 
     def remove_weight_norm(self):
-        print("Removing weight norm...")
         for l in self.ups:
             remove_weight_norm(l)
         for l in self.resblocks:

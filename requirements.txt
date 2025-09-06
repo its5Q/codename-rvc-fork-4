@@ -37,7 +37,7 @@ transformers==4.44.2
 nnaudio==0.3.3
 ring-attention-pytorch @ https://github.com/codename0og/codename-essentials/raw/refs/heads/main/ring_attention_pytorch-0.5.17-py3-none-any.whl; sys_platform == "win32"
 triton-windows; sys_platform == "win32"
-
+peft==0.17.1
 # Visualization and UI
 matplotlib==3.7.2
 tensorboard
