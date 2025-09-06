@@ -10,7 +10,6 @@ import json
 from distutils.util import strtobool
 import librosa
 import multiprocessing
-import noisereduce as nr
 import shutil
 import soundfile as sf
 import pyloudnorm as pyln
@@ -178,6 +177,7 @@ class PreProcess:
             if process_effects:
                 audio = signal.lfilter(self.b_high, self.a_high, audio)
             if noise_reduction:
+                import noisereduce as nr
                 audio = nr.reduce_noise(y=audio, sr=self.sr, prop_decrease=reduction_strength)
 
             # Slicing approach

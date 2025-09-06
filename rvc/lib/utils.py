@@ -8,11 +8,9 @@ import numpy as np
 import re
 import unicodedata
 import wget
-from torch import nn
 import pyloudnorm as pyln
 
 import logging
-from transformers import HubertModel
 import warnings
 
 # Remove this to see warnings about transformers models
@@ -20,20 +18,12 @@ warnings.filterwarnings("ignore")
 
 logging.getLogger("fairseq").setLevel(logging.ERROR)
 logging.getLogger("faiss.loader").setLevel(logging.ERROR)
-logging.getLogger("transformers").setLevel(logging.ERROR)
-logging.getLogger("torch").setLevel(logging.ERROR)
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
 
 base_path = os.path.join(now_dir, "rvc", "models", "formant", "stftpitchshift")
 stft = base_path + ".exe" if sys.platform == "win32" else base_path
-
-
-class HubertModelWithFinalProj(HubertModel):
-    def __init__(self, config):
-        super().__init__(config)
-        self.final_proj = nn.Linear(config.hidden_size, config.classifier_proj_size)
 
 # Not used anymore. All logic contained in the ' preprocess.py '
 def get_loudness_and_peak(audio: np.ndarray, sample_rate: int):
@@ -217,6 +207,18 @@ def format_title(title):
 
 
 def load_embedding(embedder_model, custom_embedder=None):
+    from transformers import HubertModel
+    from torch import nn
+
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    logging.getLogger("torch").setLevel(logging.ERROR)
+
+    class HubertModelWithFinalProj(HubertModel):
+        def __init__(self, config):
+            super().__init__(config)
+            self.final_proj = nn.Linear(config.hidden_size, config.classifier_proj_size)
+
+
     embedder_root = os.path.join(now_dir, "rvc", "models", "embedders")
     embedding_list = {
         "contentvec": os.path.join(embedder_root, "contentvec"),
