@@ -5,6 +5,7 @@ process_pids = []
 
 import shutil
 import sys
+import json
 from multiprocessing import cpu_count
 
 import gradio as gr
@@ -39,6 +40,9 @@ sup_audioext = {
     "webm",
     "ac3",
 }
+
+# List of components that should have their states saved
+saved_components = []
 
 # Custom Pretraineds
 pretraineds_custom_path = os.path.join(
@@ -276,6 +280,11 @@ def auto_enable_checkpointing():
     except:
         return False
 
+presets_path = os.path.join(now_dir, 'assets', 'training_presets')
+
+def get_presets_list():
+    return [os.path.splitext(s)[0] for s in os.listdir(presets_path) if s.endswith('.json')]
+
 # Init state for certain options.
 initial_sample_rate_choices = ["32000", "40000", "48000"]
 initial_sample_rate = "48000"
@@ -305,6 +314,22 @@ if fp16_check:
 
 # Train Tab
 def train_tab():
+    # Training presets section
+    with gr.Accordion("Training Presets", open=False):
+        with gr.Row():
+            refresh_presets_button = gr.Button("Refresh Presets")
+        with gr.Row():
+            with gr.Column():
+                preset_dropdown = gr.Dropdown(
+                    choices=get_presets_list(),
+                    label="Preset Name",
+                    allow_custom_value=True,
+                    interactive=True
+                )
+            with gr.Column():
+                save_preset_button = gr.Button("Save to preset")
+                load_preset_button = gr.Button("Load from preset")
+
     # Model settings section
     with gr.Accordion("Model Settings"):
         with gr.Row():
@@ -316,6 +341,7 @@ def train_tab():
                     value="example-model-name",
                     interactive=True,
                     allow_custom_value=True,
+                    key='model_name'
                 )
                 architecture = gr.Radio(
                     label="Architecture",
@@ -324,6 +350,7 @@ def train_tab():
                     value="RVC",
                     interactive=True,
                     visible=True,
+                    key='architecture'
                 )
                 vocoder_arch = gr.State("hifi_mrf_refine")
                 optimizer = gr.Radio(
@@ -333,6 +360,7 @@ def train_tab():
                     value=initial_optimizer,
                     interactive=True,
                     visible=True,
+                    key='optimizer'
                 )
             with gr.Column():
                 sampling_rate = gr.Radio(
@@ -341,6 +369,7 @@ def train_tab():
                     choices=initial_sample_rate_choices,
                     value=initial_sample_rate,
                     interactive=True,
+                    key='sampling_rate'
                 )
                 vocoder = gr.Radio(
                     label="Vocoder",
@@ -349,6 +378,7 @@ def train_tab():
                     value="HiFi-GAN",
                     interactive=False,
                     visible=True,
+                    key='vocoder'
                 )
         with gr.Accordion(
             "CPU / GPU settings for ' f0 ' and ' features ' extraction.",
@@ -364,14 +394,16 @@ def train_tab():
                         label="CPU Threads",
                         info="The number of CPU threads used in the extraction process. \n By default, it is set to the maximum number of threads available on your CPU. \n ( Which is recommended in most cases. )",
                         interactive=True,
+                        key='cpu_cores'
                     )
                 with gr.Column():
-                    gpu = gr.Textbox(
+                    extract_gpu = gr.Textbox(
                         label="GPU Number",
                         info="Specify the number of GPUs you wish to utilize for extracting by entering them separated by hyphens (-).",
                         placeholder="0 to ∞ separated by -",
                         value=str(get_number_of_gpus()),
                         interactive=True,
+                        key='extract_gpu'
                     )
                     gr.Textbox(
                         label="GPU Information",
@@ -379,6 +411,7 @@ def train_tab():
                         value=get_gpu_info(),
                         interactive=False,
                     )
+
     # Preprocess section
     with gr.Accordion("Preprocess"):
         dataset_path = gr.Dropdown(
@@ -387,6 +420,7 @@ def train_tab():
             choices=get_datasets_list(),
             allow_custom_value=True,
             interactive=True,
+            key='dataset_path'
         )
         dataset_creator = gr.Checkbox(
             label="Dataset Creator",
@@ -436,6 +470,7 @@ def train_tab():
                     value="ffmpeg",
                     interactive=True,
                     scale=1.45,
+                    key='loading_resampling'
                 )
                 normalization_mode = gr.Radio(
                     label="Loudness Normalization",
@@ -444,6 +479,7 @@ def train_tab():
                     value="post",
                     interactive=True,
                     visible=True,
+                    key='normalization_mode'
                 )
                 target_lufs = gr.Number(
                     label="Target LUFS",
@@ -451,6 +487,7 @@ def train_tab():
                     value=-20.0,
                     interactive=True,
                     scale=0.9,
+                    key='target_lufs'
                 )
                 lufs_range_finder = gr.Checkbox(
                     label="LUFS range finder",
@@ -459,6 +496,7 @@ def train_tab():
                     interactive=True,
                     visible=True,
                     scale=0.8,
+                    key='lufs_range_finder'
                 )
             with gr.Row():
                 cut_preprocess = gr.Radio(
@@ -467,6 +505,7 @@ def train_tab():
                     choices=["Skip", "Simple", "Automatic"],
                     value="Simple",
                     interactive=True,
+                    key='cut_preprocess'
                 )
                 chunk_len = gr.Slider(
                     0.5,
@@ -477,6 +516,7 @@ def train_tab():
                     info="Length of the audio slice for 'Simple' method.",
                     interactive=True,
                     scale=0.46,
+                    key='chunk_len'
                 )
                 overlap_len = gr.Slider(
                     0.0,
@@ -487,6 +527,7 @@ def train_tab():
                     info="Length of the overlap between slices for 'Simple' method.",
                     interactive=True,
                     scale=0.57,
+                    key='overlap_len'
                 )
             with gr.Column():
                 process_effects = gr.Checkbox(
@@ -495,6 +536,7 @@ def train_tab():
                     value=True,
                     interactive=True,
                     visible=True,
+                    key='process_effects'
                 )
             with gr.Column():
                 noise_reduction = gr.Checkbox(
@@ -503,6 +545,7 @@ def train_tab():
                     value=False,
                     interactive=True,
                     visible=True,
+                    key='noise_reduction'
                 )
                 clean_strength = gr.Slider(
                     minimum=0,
@@ -512,6 +555,7 @@ def train_tab():
                     visible=False,
                     value=0.5,
                     interactive=True,
+                    key='clean_strength'
                 )
         preprocess_output_info = gr.Textbox(
             label="Output Information",
@@ -553,6 +597,7 @@ def train_tab():
                 choices=["crepe", "crepe-tiny", "rmvpe", "fcpe"],
                 value="rmvpe",
                 interactive=True,
+                key='f0_method'
             )
 
             embedder_model = gr.Radio(
@@ -568,6 +613,7 @@ def train_tab():
                 ],
                 value="contentvec",
                 interactive=True,
+                key='embedder_model'
             )
         include_mutes = gr.Slider(
             0,
@@ -578,6 +624,7 @@ def train_tab():
             info="**Adding several silent files to the training set enables the model to handle pure silence in inferred audio files. Select '0' ( zero ) if your dataset is clean and already contains segments of pure silence.**",
             value=True,
             interactive=True,
+            key='include_mutes'
         )
         with gr.Row(visible=False) as embedder_custom:
             with gr.Accordion("Custom Embedder", open=True):
@@ -587,6 +634,7 @@ def train_tab():
                         choices=refresh_embedders_folders(),
                         interactive=True,
                         allow_custom_value=True,
+                        key='embedder_model_custom'
                     )
                     refresh_embedders_button = gr.Button("Refresh embedders")
                 folder_name_input = gr.Textbox(label="Folder Name", interactive=True)
@@ -613,7 +661,7 @@ def train_tab():
                 model_name,
                 f0_method,
                 cpu_cores,
-                gpu,
+                extract_gpu,
                 sampling_rate,
                 vocoder_arch,
                 embedder_model,
@@ -634,6 +682,7 @@ def train_tab():
                 label="Batch Size",
                 info="[ TOO BIG BATCH SIZE CAN LEAD TO VRAM 'OOM' ISSUES. ]\n\n Bigger batch size: \n- Promotes smoother, more stable gradients. \n- Can beneficial in cases where your dataset is big and diverse. \n- Can lead to early overtraining or flat / ' stuck ' graphs. \n- Generalization might be worsened. \n\n Smaller batch size: \n- Promotes noisier, less stable gradients. \n- More suitable when your dataset is small, less diverse or repetitive. \n- Can lead to instability / divergence or noisy as hell graphs. \n- Generalization might be improved.",
                 interactive=True,
+                key='batch_size'
             )
             save_every_epoch = gr.Slider(
                 1,
@@ -643,6 +692,7 @@ def train_tab():
                 label="Saving frequency",
                 info="Determines the saving frequency of epochs. \n For example: Saving every 5th epoch.",
                 interactive=True,
+                key='save_every_epoch'
             )
             total_epoch = gr.Slider(
                 1,
@@ -652,6 +702,7 @@ def train_tab():
                 label="Total Epochs",
                 info="Specifies the overall quantity of epochs for the model training process.",
                 interactive=True,
+                key='total_epoch'
             )
         with gr.Accordion("Advanced Settings for training", open=False):
             with gr.Row():
@@ -661,36 +712,42 @@ def train_tab():
                         info="Enabling this setting will result in the G and D files saving only their most recent versions. \n( Keep it enabled unless you know what you're doing. )",
                         value=True,
                         interactive=True,
+                        key='save_only_latest'
                     )
                     save_every_weights = gr.Checkbox(
                         label="Save Every Weights",
                         info="This setting saves the model save at each save-point. \n( Determined by the ' Saving frequency ' slider. )",
                         value=True,
                         interactive=True,
+                        key='save_every_weights'
                     )
                     pretrained = gr.Checkbox(
                         label="Pretrained",
                         info="Utilize pretrained models for fine-tuning. \nKeep it enabled unless you're training from-scratch",
                         value=True,
                         interactive=True,
+                        key='pretrained'
                     )
                     cleanup = gr.Checkbox(
                         label="Fresh Training",
                         info="Enable this setting only if you are training a new model from scratch or restarting the training. \nWhat it does is essentially deleting all previously generated weights and tensorboard logs.",
                         value=False,
                         interactive=True,
+                        key='cleanup'
                     )
                     cache_dataset_in_gpu = gr.Checkbox(
                         label="Cache Dataset in GPU",
                         info="Cache the dataset in GPU memory to speed up the training process. \n NOTE: It is advised to have it turned off! ",
                         value=False,
                         interactive=True,
+                        key='cache_dataset_in_gpu'
                     )
                     use_checkpointing = gr.Checkbox(
                         label="Checkpointing",
                         info="Enables memory-efficient training. \n This reduces the vram usage in exchange for slower training speed.",
                         value=auto_enable_checkpointing,
                         interactive=True,
+                        key='checkpointing'
                     )
                     lora_finetuning = gr.Checkbox(
                         label="LoRA finetuning",
@@ -712,18 +769,21 @@ def train_tab():
                         info="Uses TF32 precision instead of FP32, typically resulting in 30% to 100% faster training. \n**Requires min. RTX 30xx ( At least Ampere microarchitecture )**",
                         value=microarchitecture_capability_checker(),
                         interactive=microarchitecture_capability_checker(),
+                        key='use_tf32'
                     )
                     use_benchmark = gr.Checkbox(
                         label="Use 'cuDNN benchmark' mode",
                         info="Enable cuDNN benchmark mode **for potential speedup.**",
                         value=True,
                         interactive=True,
+                        key='use_benchmark'
                     )
                     use_deterministic = gr.Checkbox(
                         label="Use 'cuDNN deterministic' mode",
                         info="Toggle deterministic mode for reproducibility **at possible performance cost.**",
                         value=False,
                         interactive=True,
+                        key='use_deterministic'
                     )
                     spectral_loss = gr.Radio(
                         label="Spectral loss",
@@ -731,6 +791,7 @@ def train_tab():
                         choices=["L1 Mel Loss", "Multi-Scale Mel Loss", "Multi-Res STFT Loss"],
                         value="L1 Mel Loss",
                         interactive=True,
+                        key='spectral_loss'
                     )
                     lr_scheduler = gr.Radio(
                         label="Learning rate scheduler",
@@ -738,6 +799,7 @@ def train_tab():
                         choices=["exp decay", "cosine annealing", "none"],
                         value="exp decay",
                         interactive=True,
+                        key='lr_scheduler'
                     )
                     exp_decay_gamma = gr.Radio(
                         label="Exponential decay gamma",
@@ -746,18 +808,21 @@ def train_tab():
                         value="0.999875",
                         interactive=True,
                         visible=True,
+                        key='exp_decay_gamma'
                     )
                     use_validation = gr.Checkbox(
                         label="Enable hold-out validation",
                         info="Enabled by default. **Requires carefully handled dataset!**",
                         value=False,
                         interactive=True,
+                        key='use_validation'
                     )
                     double_d_update = gr.Checkbox(
                         label="Double-update strategy for Discriminator",
                         info="Makes it so the Discriminator is being updated twice per step. \n Disabled by default.",
                         value=False,
                         interactive=True,
+                        key='double_d_update'
                     )
             with gr.Column():
                 custom_pretrained = gr.Checkbox(
@@ -765,6 +830,7 @@ def train_tab():
                     info="Utilizing custom pretrained models can lead to superior results, as selecting the most suitable pretrained models tailored to the specific use case can significantly enhance performance.",
                     value=False,
                     interactive=True,
+                    key='custom_pretrained'
                 )
                 with gr.Column(visible=False) as pretrained_custom_settings:
                     with gr.Accordion("Pretrained Custom Settings"):
@@ -780,6 +846,7 @@ def train_tab():
                             choices=sorted(pretraineds_list_g),
                             interactive=True,
                             allow_custom_value=True,
+                            key='g_pretrained_path'
                         )
                         d_pretrained_path = gr.Dropdown(
                             label="Custom Pretrained D",
@@ -787,6 +854,7 @@ def train_tab():
                             choices=sorted(pretraineds_list_d),
                             interactive=True,
                             allow_custom_value=True,
+                            key='d_pretrained_path'
                         )
                 multiple_gpu = gr.Checkbox(
                     label="GPU Settings",
@@ -795,15 +863,17 @@ def train_tab():
                     ),
                     value=False,
                     interactive=True,
+                    key='multiple_gpu'
                 )
                 with gr.Column(visible=False) as gpu_custom_settings:
                     with gr.Accordion("GPU ID override / Multi-gpu-training configuration"):
-                        gpu = gr.Textbox(
+                        training_gpu = gr.Textbox(
                             label="GPU Number",
                             info="Specify the number of GPUs you wish to utilize for training by entering their ID and have them separated by hyphens. (These symbols: -)",
                             placeholder="0 to ∞ separated by -",
                             value=str(get_number_of_gpus()),
                             interactive=True,
+                            key="training_gpu"
                         )
                         gr.Textbox(
                             label="GPU Information",
@@ -816,6 +886,7 @@ def train_tab():
                     info="Enables usage of warmup for training. ( Currently supports only ' linear lr warmup ' )",
                     value=False,
                     interactive=True,
+                    key='use_warmup'
                 )
                 with gr.Column(visible=False) as warmup_settings:
                     with gr.Accordion("Warmup settings"):
@@ -827,6 +898,7 @@ def train_tab():
                             label="Duration of the warmup phase",
                             info="Set the maximum number of epochs you want the warmup phase to last for. For small datasets you can try anywhere from 2 to 10. Alternatively, follow the ' 5–10% of the total epochs ' rule ",
                             interactive=True,
+                            key='warmup_duration'
                         )
 
                 use_custom_lr = gr.Checkbox(
@@ -834,6 +906,7 @@ def train_tab():
                     info="Enables customization of learning rate for Generator and Discriminator.",
                     value=False,
                     interactive=True,
+                    key='use_custom_lr'
                 )
                 with gr.Column(visible=False) as custom_lr_settings:
                     with gr.Accordion("Custom lr settings"):
@@ -842,19 +915,44 @@ def train_tab():
                             placeholder="e.g. 0.0001 or 1e-4",
                             info="Define the lr for generator. Accepts both decimals and scientific notation i.e. '1e-4'. ",
                             interactive=True,
+                            key='custom_lr_g'
                         )
                         custom_lr_d = gr.Textbox(
                             label="Learning rate for Discriminator",
                             placeholder="e.g. 0.0001 or 1e-4",
                             info="Define the lr for discriminator. Accepts both decimals and scientific notation i.e. '1e-4'. ",
                             interactive=True,
+                            key='custom_lr_d'
                         )
+
+                use_kl_annealing = gr.Checkbox(
+                    label="Use KL loss annealing",
+                    info="Experimental. Enables cyclic KL loss annealing for training. Helps to not overfit on smaller datasets and should generally help with convergence.",
+                    value=False,
+                    interactive=True,
+                    key='use_kl_annealing'
+                )
+
+                with gr.Column(visible=False) as kl_annealing_settings:
+                    with gr.Accordion("KL annealing settings"):
+                        kl_annealing_period = gr.Slider(
+                            1,
+                            100,
+                            3,
+                            step=1,
+                            label="Annealing period (epochs)",
+                            info="Limited testing showed 3 epochs is the most optimal, but you can experiment for yourself",
+                            interactive=True,
+                            key='kl_annealing_period'
+                        )
+
                 index_algorithm = gr.Radio(
                     label="Index Algorithm",
                     info="KMeans is a clustering algorithm that divides the dataset into K clusters. This setting is particularly useful for large datasets.",
                     choices=["Auto", "Faiss", "KMeans"],
                     value="Auto",
                     interactive=True,
+                    key='index_algorithm'
                 )
 
         def enforce_terms(terms_accepted, *args):
@@ -891,7 +989,7 @@ def train_tab():
                     total_epoch,
                     sampling_rate,
                     batch_size,
-                    gpu,
+                    training_gpu,
                     use_warmup,
                     warmup_duration,
                     pretrained,
@@ -918,6 +1016,8 @@ def train_tab():
                     use_custom_lr,
                     custom_lr_g,
                     custom_lr_d,
+                    use_kl_annealing,
+                    kl_annealing_period
                 ],
                 outputs=[train_output_info],
             )
@@ -1076,6 +1176,83 @@ def train_tab():
 
             def update_noise_reduce_slider_visibility(noise_reduction):
                 return gr.update(visible=noise_reduction)
+            
+            saved_components.extend([
+                # Model settings
+                architecture, optimizer, vocoder, sampling_rate, cpu_cores, extract_gpu,
+
+                # Preprocessing
+                dataset_path, loading_resampling, normalization_mode,
+                target_lufs, lufs_range_finder, cut_preprocess,
+                chunk_len, overlap_len, process_effects,
+                noise_reduction, clean_strength,
+
+                # Feature extract
+                f0_method, embedder_model, include_mutes,
+                embedder_model_custom,
+
+                # Training
+                batch_size, save_every_epoch, total_epoch,
+                save_only_latest, save_every_weights, pretrained,
+                cleanup, cache_dataset_in_gpu, use_checkpointing,
+                use_tf32, use_benchmark, use_deterministic, spectral_loss,
+                lr_scheduler, exp_decay_gamma, use_validation,
+                double_d_update, custom_pretrained, g_pretrained_path,
+                d_pretrained_path, multiple_gpu, training_gpu, use_warmup,
+                warmup_duration, use_custom_lr, custom_lr_g,
+                custom_lr_d, use_kl_annealing, kl_annealing_period,
+                index_algorithm
+            ])
+
+            def save_training_preset(inputs):
+                settings = {}
+                for component in saved_components:
+                    settings[component.key] = inputs[component]
+
+                preset_path = os.path.normpath(os.path.abspath(os.path.join(presets_path, inputs[preset_dropdown] + '.json')))
+
+                if not preset_path.startswith(presets_path):
+                    raise gr.Error(f"Invalid training preset name: {inputs[preset_dropdown]}", duration=5)
+
+                with open(preset_path, 'w', encoding='utf-8') as of:
+                    json.dump(settings, of, indent=4, ensure_ascii=False)
+
+            def load_training_preset(preset_name):
+                if preset_name not in get_presets_list():
+                    raise gr.Error(f'Preset does not exist: {preset_name}')
+
+                preset_path = os.path.normpath(os.path.abspath(os.path.join(presets_path, preset_name + '.json')))
+
+                with open(preset_path, 'r', encoding='utf-8') as ifile:
+                    settings = json.loads(ifile.read())
+
+                return [
+                    settings[component.key] if component.key in settings else gr.skip()
+                    for component in saved_components
+                ]
+
+            refresh_presets_button.click(
+                fn=lambda: gr.Dropdown(choices=get_presets_list()), 
+                outputs=[preset_dropdown]
+            )
+
+            save_preset_button.click(
+                fn=save_training_preset,
+                inputs=set(saved_components) | {preset_dropdown}
+            ).then(
+                fn=lambda: gr.Dropdown(choices=get_presets_list()), 
+                outputs=[preset_dropdown]
+            )
+
+            load_preset_button.click(
+                fn=load_training_preset,
+                inputs=[preset_dropdown],
+                outputs=saved_components
+            ).then(  # update twice so components depending on "change" events get updated
+                fn=load_training_preset,
+                inputs=[preset_dropdown],
+                outputs=saved_components
+            )
 
             noise_reduction.change(
                 fn=update_noise_reduce_slider_visibility,
@@ -1154,6 +1331,11 @@ def train_tab():
                 fn=toggle_visible,
                 inputs=[use_custom_lr],
                 outputs=[custom_lr_settings],
+            )
+            use_kl_annealing.change(
+                fn=toggle_visible,
+                inputs=[use_kl_annealing],
+                outputs=[kl_annealing_settings]
             )
             lr_scheduler.change(
                 fn=toggle_visible_gamma,

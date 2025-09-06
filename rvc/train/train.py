@@ -114,6 +114,8 @@ lora_rank = int(sys.argv[28])
 use_custom_lr = strtobool(sys.argv[29])
 custom_lr_g, custom_lr_d = (float(sys.argv[30]), float(sys.argv[31])) if use_custom_lr else (None, None)
 assert not use_custom_lr or (custom_lr_g and custom_lr_d), "Invalid custom LR values."
+use_kl_annealing = strtobool(sys.argv[32])
+kl_annealing_period = int(sys.argv[33])
 
 # Parse command line arguments end region ===========================
 
@@ -1240,6 +1242,12 @@ def training_loop(
                 loss_adv = generator_loss(y_d_hat_g)
 
                 # KL ( Kullback–Leibler divergence ) loss
+                if use_kl_annealing:
+                    annealing_period_steps = len(train_loader) * kl_annealing_period
+                    kl_beta = 0.5 * (1 - math.cos((global_step % annealing_period_steps) * (math.pi / annealing_period_steps)))
+                else:
+                    kl_beta = 1.0
+
                 loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * config.train.c_kl
 
                 if vocoder == "RingFormer":
@@ -1250,9 +1258,9 @@ def training_loop(
 
                 # Total generator loss
                 if vocoder == "RingFormer":
-                    loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl + loss_sd
+                    loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl * kl_beta + loss_sd
                 else:
-                    loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl
+                    loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl * kl_beta
 
 
             # Generator backward and update:

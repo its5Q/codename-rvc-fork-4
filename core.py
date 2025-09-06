@@ -542,6 +542,8 @@ def run_train_script(
     use_custom_lr: bool = False,
     custom_lr_g: float = 1e-4,
     custom_lr_d: float = 1e-4,
+    use_kl_annealing: bool = False,
+    kl_annealing_period: int = 3
     
 ):
     global training_process
@@ -599,7 +601,9 @@ def run_train_script(
                 lora_rank,
                 use_custom_lr,
                 custom_lr_g,
-                custom_lr_d
+                custom_lr_d,
+                use_kl_annealing,
+                kl_annealing_period
             ],
         ),
     ]
