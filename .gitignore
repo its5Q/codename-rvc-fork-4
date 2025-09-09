@@ -4,6 +4,8 @@
 !assets/audios/audio-others/.gitkeep
 !logs/.gitkeep
 !logs/mute/
+!logs/mute_spin_v1/
+!logs/mute_spin_v2/
 !logs/reference/
 !logs/reference/**
 !logs/run_tensorboard_in_model_folder.bat
