@@ -581,7 +581,9 @@ def print_init_setup(
     d_updates_per_step,
     use_validation,
     lr_scheduler,
-    exp_decay_gamma
+    exp_decay_gamma,
+    use_kl_annealing,
+    kl_annealing_cycle_duration,
 ):
     # Warmup init msg:
     if rank == 0:
@@ -629,6 +631,10 @@ def print_init_setup(
 
         if use_warmup:
             print(f"    ██████  Warmup Enabled for: {warmup_duration} epochs.")
+
+        if use_kl_annealing:
+            print(f"    ██████  KL loss annealing enabled with cycle duration of: {kl_annealing_cycle_duration} epochs.")
+
 
 def train_loader_safety(benchmark_mode, train_loader):
     if not benchmark_mode:

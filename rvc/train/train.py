@@ -105,8 +105,10 @@ lr_scheduler = sys.argv[23]
 exp_decay_gamma = float(sys.argv[24])
 use_validation = strtobool(sys.argv[25])
 double_d_update = strtobool(sys.argv[26])
-use_custom_lr = strtobool(sys.argv[27])
-custom_lr_g, custom_lr_d = (float(sys.argv[28]), float(sys.argv[29])) if use_custom_lr else (None, None)
+use_kl_annealing = strtobool(sys.argv[27])
+kl_annealing_cycle_duration = int(sys.argv[28])
+use_custom_lr = strtobool(sys.argv[29])
+custom_lr_g, custom_lr_d = (float(sys.argv[30]), float(sys.argv[31])) if use_custom_lr else (None, None)
 assert not use_custom_lr or (custom_lr_g and custom_lr_d), "Invalid custom LR values."
 
 # Parse command line arguments end region ===========================
@@ -643,7 +645,9 @@ def run(
         d_updates_per_step,
         use_validation,
         lr_scheduler,
-        exp_decay_gamma
+        exp_decay_gamma,
+        use_kl_annealing,
+        kl_annealing_cycle_duration,
     )
 
     # Initial setup
@@ -1003,6 +1007,12 @@ def training_loop(
                 loss_adv = generator_loss(y_d_hat_g)
 
                 # KL ( Kullback–Leibler divergence ) loss
+                if use_kl_annealing:
+                    annealing_cycle_steps = len(train_loader) * kl_annealing_cycle_duration
+                    kl_beta = 0.5 * (1 - math.cos((global_step % annealing_cycle_steps) * (math.pi / annealing_cycle_steps)))
+                else:
+                    kl_beta = 1.0
+
                 loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * config.train.c_kl
 
                 if vocoder == "RingFormer":
@@ -1013,9 +1023,9 @@ def training_loop(
 
                 # Total generator loss
                 if vocoder == "RingFormer":
-                    loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl + loss_sd
+                    loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl * kl_beta + loss_sd
                 else:
-                    loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl
+                    loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl * kl_beta
 
 
             # Generator backward and update:

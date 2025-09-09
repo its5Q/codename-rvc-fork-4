@@ -96,7 +96,7 @@ def process_files(files, f0_method, device, threads):
 def run_pitch_extraction(files, devices, f0_method, threads):
     devices_str = ", ".join(devices)
     print(
-        f"Starting pitch extraction with {num_processes} cores on {devices_str} using {f0_method}..."
+        f"Starting pitch extraction with {num_processes} threads on {devices_str} using {f0_method}..."
     )
     start_time = time.time()
 
@@ -149,7 +149,7 @@ def run_embedding_extraction(
 ):
     devices_str = ", ".join(devices)
     print(
-        f"Starting embedding extraction with {num_processes} cores on {devices_str}..."
+        f"Starting embedding extraction with {num_processes} threads on {devices_str}..."
     )
     start_time = time.time()
     with concurrent.futures.ProcessPoolExecutor(max_workers=len(devices)) as executor:

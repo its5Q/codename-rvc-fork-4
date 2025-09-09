@@ -426,7 +426,7 @@ def run_preprocess_script(
     model_name: str,
     dataset_path: str,
     sample_rate: int,
-    cpu_cores: int,
+    cpu_threads: int,
     cut_preprocess: str,
     process_effects: bool,
     noise_reduction: bool,
@@ -448,7 +448,7 @@ def run_preprocess_script(
                 os.path.join(logs_path, model_name),
                 dataset_path,
                 sample_rate,
-                cpu_cores,
+                cpu_threads,
                 cut_preprocess,
                 process_effects,
                 noise_reduction,
@@ -470,7 +470,7 @@ def run_preprocess_script(
 def run_extract_script(
     model_name: str,
     f0_method: str,
-    cpu_cores: int,
+    cpu_threads: int,
     gpu: int,
     sample_rate: int,
     vocoder_arch: int,
@@ -490,7 +490,7 @@ def run_extract_script(
             [
                 model_path,
                 f0_method,
-                cpu_cores,
+                cpu_threads,
                 gpu,
                 sample_rate,
                 vocoder_arch,
@@ -537,6 +537,8 @@ def run_train_script(
     exp_decay_gamma: str = "0.999875",
     use_validation: bool = True,
     double_d_update: bool = False,
+    use_kl_annealing: bool = False,
+    kl_annealing_cycle_duration: int = 3,
     use_custom_lr: bool = False,
     custom_lr_g: float = 1e-4,
     custom_lr_d: float = 1e-4,
@@ -593,6 +595,8 @@ def run_train_script(
                 exp_decay_gamma,
                 use_validation,
                 double_d_update,
+                use_kl_annealing,
+                kl_annealing_cycle_duration,
                 use_custom_lr,
                 custom_lr_g,
                 custom_lr_d
@@ -1886,9 +1890,9 @@ def parse_arguments():
         required=True,
     )
     preprocess_parser.add_argument(
-        "--cpu_cores",
+        "--cpu_threads",
         type=int,
-        help="Number of CPU cores to use for preprocessing.",
+        help="Number of CPU threads to use for preprocessing.",
         choices=range(1, 65),
     )
     preprocess_parser.add_argument(
@@ -1989,9 +1993,9 @@ def parse_arguments():
         default="rmvpe",
     )
     extract_parser.add_argument(
-        "--cpu_cores",
+        "--cpu_threads",
         type=int,
-        help="Number of CPU cores to use for feature extraction (optional).",
+        help="Number of CPU threads to use for feature extraction (optional).",
         choices=range(1, 65),
         default=None,
     )
@@ -2183,7 +2187,7 @@ def parse_arguments():
     train_parser.add_argument(
         "--warmup_duration",
         type=int,
-        help="Duration of warmup phase (Measured in epochs).",
+        help="Duration of warmup phase (in epochs).",
         choices=range(1, 1000),
         default=10,
     )
@@ -2245,6 +2249,19 @@ def parse_arguments():
         choices=[True, False],
         help="Whether you wanna use double-update strategy for Discriminator.",
         default=False,
+    )
+    train_parser.add_argument(
+        "--use_kl_annealing",
+        type=lambda x: bool(strtobool(x)),
+        choices=[True, False],
+        help="Whether you wanna use kl annealing.",
+        default=False,
+    )
+    train_parser.add_argument(
+        "--kl_annealing_cycle_duration",
+        type=int,
+        help="Duration of kl annealing phase (in epochs).",
+        default=3,
     )
     train_parser.add_argument(
         "--use_custom_lr",
@@ -2540,7 +2557,7 @@ def main():
                 model_name=args.model_name,
                 dataset_path=args.dataset_path,
                 sample_rate=args.sample_rate,
-                cpu_cores=args.cpu_cores,
+                cpu_threads=args.cpu_threads,
                 cut_preprocess=args.cut_preprocess,
                 process_effects=args.process_effects,
                 noise_reduction=args.noise_reduction,
@@ -2556,7 +2573,7 @@ def main():
             run_extract_script(
                 model_name=args.model_name,
                 f0_method=args.f0_method,
-                cpu_cores=args.cpu_cores,
+                cpu_threads=args.cpu_threads,
                 gpu=args.gpu,
                 sample_rate=args.sample_rate,
                 vocoder_arch=args.vocoder_arch,
