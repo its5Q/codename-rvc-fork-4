@@ -37,7 +37,13 @@ def generate_filelist(
 
     options = []
 
-    mute_folder = "mute" if embedder_model == "contentvec" else "mute_spin"
+    if embedder_model == "contentvec":
+        mute_folder = "mute"
+    elif embedder_model == "spin_v1":
+        mute_folder = "mute_spin_v1"
+    else:
+        mute_folder = "mute_spin_v2"
+
     mute_base_path = os.path.join(current_directory, "logs", mute_folder)
 
     sids = []

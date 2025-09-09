@@ -247,8 +247,6 @@ def tts_tab():
                     "crepe",
                     "crepe-tiny",
                     "rmvpe",
-                    "fcpe",
-                    "hybrid[rmvpe+fcpe]",
                 ],
                 value="rmvpe",
                 interactive=True,
@@ -258,7 +256,8 @@ def tts_tab():
                 info="Model used for learning speaker embedding.",
                 choices=[
                     "contentvec",
-                    "spin",
+                    "spin_v1",
+                    "spin_v2",
                     "chinese-hubert-base",
                     "japanese-hubert-base",
                     "korean-hubert-base",

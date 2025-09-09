@@ -4,7 +4,6 @@
 !assets/audios/audio-others/.gitkeep
 !logs/.gitkeep
 !logs/mute/
-!logs/mute_spin/
 !logs/reference/
 !logs/reference/**
 !logs/run_tensorboard_in_model_folder.bat
@@ -23,9 +22,11 @@ logs/
 rvc/models/pretraineds/
 rvc/models/predictors/fcpe.pt
 rvc/models/predictors/rmvpe.pt
-rvc/models/embedders/spin/pytorch_model.bin
+rvc/models/embedders/spin_v1/pytorch_model.bin
+rvc/models/embedders/spin_v2/pytorch_model.bin
 rvc/models/embedders/contentvec/pytorch_model.bin
-rvc/models/embedders/spin/config.json
+rvc/models/embedders/spin_v1/config.json
+rvc/models/embedders/spin_v2/config.json
 rvc/models/embedders/contentvec/config.json
 
 rvc/infer/pipeline - debug_ver.py
@@ -45,3 +46,6 @@ rvc/train/train - Copy (2) - remap active.py
 EXTRAS/transfer.py
 rvc/configs/config - backup.py
 rvc/train/preprocess/preprocess - LUFS WITHOUT SAFETY.py
+rvc/train/train - Failed Lora.py
+rvc/train/train - Copy ( refactored - contained in run ).py
+rvc/train/train - Copy ( Classic - outdated ).py

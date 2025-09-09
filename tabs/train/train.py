@@ -549,8 +549,8 @@ def train_tab():
         with gr.Row():
             f0_method = gr.Radio(
                 label="Pitch extraction algorithm",
-                info="Pitch extraction algorithm to use for the audio conversion: \n\n**RMVPE:** The default algorithm, recommended for most cases. \n- The fastest, very robust to noise. Can tolerate harmonies / layered vocals to some degree.  \n\n**CREPE:** Better suited for truly clean audio. \n- Is slower and way worse in handling noise. Can provide different / softer-ish results. \n\n**CREPE-TINY:** Smaller / lighter variant of CREPE. \n- Performs worse than 'full' ( standard crepe ) but is way lighter on hardware. \n\n**FCPE**: Fast Context-based Pitch Estimation. \n- Lighter than RMVPE ~ More Real-time friendly. Different behavior for unvoiced elements. \n- Can possibly sound a lil different than RMVPE - Imo not recommended for training.",
-                choices=["crepe", "crepe-tiny", "rmvpe", "fcpe"],
+                info="Pitch extraction algorithm to use for the audio conversion: \n\n**RMVPE:** The default algorithm, recommended for most cases. \n- The fastest, very robust to noise. Can tolerate harmonies / layered vocals to some degree.  \n\n**CREPE:** Better suited for truly clean audio. \n- Is slower and way worse in handling noise. Can provide different / softer-ish results. \n\n**CREPE-TINY:** Smaller / lighter variant of CREPE. \n- Performs worse than 'full' ( standard crepe ) but is way lighter on hardware.",
+                choices=["crepe", "crepe-tiny", "rmvpe"],
                 value="rmvpe",
                 interactive=True,
             )
@@ -560,7 +560,8 @@ def train_tab():
                 info="Model used for learning speaker embedding and features extraction.",
                 choices=[
                     "contentvec",
-                    "spin",
+                    "spin_v1",
+                    "spin_v2",
                     "chinese-hubert-base",
                     "japanese-hubert-base",
                     "korean-hubert-base",
@@ -635,7 +636,7 @@ def train_tab():
                 info="[ TOO BIG BATCH SIZE CAN LEAD TO VRAM 'OOM' ISSUES. ]\n\n Bigger batch size: \n- Promotes smoother, more stable gradients. \n- Can beneficial in cases where your dataset is big and diverse. \n- Can lead to early overtraining or flat / ' stuck ' graphs. \n- Generalization might be worsened. \n\n Smaller batch size: \n- Promotes noisier, less stable gradients. \n- More suitable when your dataset is small, less diverse or repetitive. \n- Can lead to instability / divergence or noisy as hell graphs. \n- Generalization might be improved.",
                 interactive=True,
             )
-            save_every_epoch = gr.Slider(
+            epoch_save_frequency = gr.Slider(
                 1,
                 5000,
                 1,
@@ -644,7 +645,7 @@ def train_tab():
                 info="Determines the saving frequency of epochs. \n For example: Saving every 5th epoch.",
                 interactive=True,
             )
-            total_epoch = gr.Slider(
+            total_epoch_count = gr.Slider(
                 1,
                 10000,
                 500,
@@ -656,15 +657,15 @@ def train_tab():
         with gr.Accordion("Advanced Settings for training", open=False):
             with gr.Row():
                 with gr.Column():
-                    save_only_latest = gr.Checkbox(
-                        label="Save Only Latest",
-                        info="Enabling this setting will result in the G and D files saving only their most recent versions. \n( Keep it enabled unless you know what you're doing. )",
+                    save_only_latest_net_models = gr.Checkbox(
+                        label="Save Only Latest G/D",
+                        info="Don't disable it unless you need each 'G' and 'D' model saved every epoch. \n( It has it's use for pretrains creation, but not for finetuning. )",
                         value=True,
                         interactive=True,
                     )
-                    save_every_weights = gr.Checkbox(
-                        label="Save Every Weights",
-                        info="This setting saves the model save at each save-point. \n( Determined by the ' Saving frequency ' slider. )",
+                    save_weight_models = gr.Checkbox(
+                        label="Save weight models",
+                        info="Keep it enabled, else the small ' weight models '( actual voice models ) won't be saved.",
                         value=True,
                         interactive=True,
                     )
@@ -692,20 +693,21 @@ def train_tab():
                         value=auto_enable_checkpointing,
                         interactive=True,
                     )
-                    lora_finetuning = gr.Checkbox(
-                        label="LoRA finetuning",
-                        info="LoRA ( Low-Rank Adaptation ) finetuning. \n Potentially faster results with much smaller TextEncoder overfitting risk.",
-                        value=False,
-                        interactive=True,
-                    )
-                    lora_rank = gr.Radio(
-                        label="Rank for LoRA",
-                        info="**Higher Rank allows the model to capture more detail and complexity from your dataset.** \n Generally, **32 is a decent starting point** ( or **16 for smaller / less complex datasets** ). \n **In a short: Rank directly controls LoRA adapter's capacity.**",
-                        choices=[16, 32, 64, 128, 256],
-                        value=32,
-                        visible=False,
-                        interactive=True,
-                    )
+                    ### Disabled. Might come up with some better LoRA like solutions in future.
+                    # lora_finetuning = gr.Checkbox(
+                        # label="LoRA finetuning",
+                        # info="LoRA ( Low-Rank Adaptation ) finetuning. \n Potentially faster results with much smaller TextEncoder overfitting risk.",
+                        # value=False,
+                        # interactive=True,
+                    # )
+                    # lora_rank = gr.Radio(
+                        # label="Rank for LoRA",
+                        # info="**Higher Rank allows the model to capture more detail and complexity from your dataset.** \n Generally, **32 is a decent starting point** ( or **16 for smaller / less complex datasets** ). \n **In a short: Rank directly controls LoRA adapter's capacity.**",
+                        # choices=[16, 32, 64, 128, 256],
+                        # value=32,
+                        # visible=False,
+                        # interactive=True,
+                    # )
                 with gr.Column():
                     use_tf32 = gr.Checkbox(
                         label="use 'TF32' precision",
@@ -885,10 +887,10 @@ def train_tab():
                 inputs=[
                     terms_checkbox,
                     model_name,
-                    save_every_epoch,
-                    save_only_latest,
-                    save_every_weights,
-                    total_epoch,
+                    epoch_save_frequency,
+                    save_only_latest_net_models,
+                    save_weight_models,
+                    total_epoch_count,
                     sampling_rate,
                     batch_size,
                     gpu,
@@ -913,8 +915,6 @@ def train_tab():
                     exp_decay_gamma,
                     use_validation,
                     double_d_update,
-                    lora_finetuning,
-                    lora_rank,
                     use_custom_lr,
                     custom_lr_g,
                     custom_lr_d,
@@ -1004,8 +1004,8 @@ def train_tab():
                         "__type__": "update",
                     }
 
-            def toggle_lora_rank(lora_finetuning):
-                return gr.update(visible=lora_finetuning)
+            # def toggle_lora_rank(lora_finetuning):
+                # return gr.update(visible=lora_finetuning)
 
             def download_prerequisites():
                     gr.Info(
@@ -1125,11 +1125,11 @@ def train_tab():
                 inputs=[pretrained, custom_pretrained],
                 outputs=[custom_pretrained, pretrained_custom_settings],
             )
-            lora_finetuning.change(
-                fn=toggle_lora_rank,
-                inputs=[lora_finetuning],
-                outputs=[lora_rank],
-            )
+            # lora_finetuning.change(
+                # fn=toggle_lora_rank,
+                # inputs=[lora_finetuning],
+                # outputs=[lora_rank],
+            # )
             custom_pretrained.change(
                 fn=toggle_visible,
                 inputs=[custom_pretrained],

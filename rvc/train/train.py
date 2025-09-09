@@ -1,51 +1,44 @@
-import subprocess
-import psutil
 import os
+import datetime
+import glob
+import itertools
+import json
+import math
 import re
+import subprocess
 import sys
-import signal
 
+pid_data = {"process_pids": []}
 os.environ["USE_LIBUV"] = "0" if sys.platform == "win32" else "1"
 
-import glob
-import json
-import torch
-import torchaudio
-import datetime
-
-import math
 from typing import Tuple
-import itertools
-
 from collections import deque
 from distutils.util import strtobool
 from random import randint, shuffle
-from time import time as ttime
-from time import sleep
-from tqdm import tqdm
+from time import time as ttime, sleep
+
 import numpy as np
+import psutil
+from tqdm import tqdm
+from pesq import pesq
+
+import torch
+import torch.nn as nn
+import torchaudio
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
-
 from torch.amp import autocast
-
 from torch.utils.data import DataLoader
-
 from torch.nn import functional as F
-import torch.nn as nn
-
 from torch.nn.utils import clip_grad_norm_
-clip_grad_norm_ = torch.nn.utils.clip_grad_norm_
-
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import auraloss
 
 now_dir = os.getcwd()
 sys.path.append(os.path.join(now_dir))
-pid_data = {"process_pids": []}
 
-# Zluda hijack
-import rvc.lib.zluda
+import rvc.lib.zluda # Zluda hijack
 
 from utils import (
     HParams,
@@ -55,44 +48,47 @@ from utils import (
     save_checkpoint,
     latest_checkpoint_path,
     load_wav_to_torch,
+    load_config_from_json,
+    mel_spec_similarity,
+    flush_writer,
+    block_tensorboard_flush_on_exit,
+    si_sdr,
+    wave_to_mel,
+    small_model_naming,
+    old_session_cleanup,
+    verify_remap_checkpoint,
+    print_init_setup,
+    train_loader_safety,
+    verify_spk_dim,
 )
-
 from losses import (
     discriminator_loss,
     generator_loss,
     feature_loss,
     kl_loss,
     phase_loss,
-
 )
-
 from mel_processing import (
-    mel_spectrogram_torch,
     spec_to_mel_torch,
     MultiScaleMelSpectrogramLoss,
 )
-
 from rvc.train.process.extract_model import extract_model
 from rvc.lib.algorithm import commons
 from rvc.train.utils import replace_keys_in_dict
 
-import torch_optimizer
-import auraloss
-from pesq import pesq
-from peft import LoraConfig, get_peft_model
 
 # Parse command line arguments start region ===========================
 
 model_name = sys.argv[1]
-save_every_epoch = int(sys.argv[2])
-total_epoch = int(sys.argv[3])
+epoch_save_frequency = int(sys.argv[2])
+total_epoch_count = int(sys.argv[3])
 pretrainG = sys.argv[4]
 pretrainD = sys.argv[5]
 gpus = sys.argv[6]
 batch_size = int(sys.argv[7])
 sample_rate = int(sys.argv[8])
-save_only_latest = strtobool(sys.argv[9])
-save_every_weights = strtobool(sys.argv[10])
+save_only_latest_net_models = strtobool(sys.argv[9])
+save_weight_models = strtobool(sys.argv[10])
 cache_data_in_gpu = strtobool(sys.argv[11])
 use_warmup = strtobool(sys.argv[12])
 warmup_duration = int(sys.argv[13])
@@ -109,13 +105,12 @@ lr_scheduler = sys.argv[23]
 exp_decay_gamma = float(sys.argv[24])
 use_validation = strtobool(sys.argv[25])
 double_d_update = strtobool(sys.argv[26])
-use_lora = bool(strtobool(sys.argv[27]))
-lora_rank = int(sys.argv[28])
-use_custom_lr = strtobool(sys.argv[29])
-custom_lr_g, custom_lr_d = (float(sys.argv[30]), float(sys.argv[31])) if use_custom_lr else (None, None)
+use_custom_lr = strtobool(sys.argv[27])
+custom_lr_g, custom_lr_d = (float(sys.argv[28]), float(sys.argv[29])) if use_custom_lr else (None, None)
 assert not use_custom_lr or (custom_lr_g and custom_lr_d), "Invalid custom LR values."
 
 # Parse command line arguments end region ===========================
+
 
 current_dir = os.getcwd()
 experiment_dir = os.path.join(current_dir, "logs", model_name)
@@ -123,17 +118,11 @@ config_save_path = os.path.join(experiment_dir, "config.json")
 dataset_path = os.path.join(experiment_dir, "sliced_audios")
 model_info_path = os.path.join(experiment_dir, "model_info.json")
 
-try:
-    with open(config_save_path, "r") as f:
-        config = json.load(f)
-    config = HParams(**config)
-except FileNotFoundError:
-    print(
-        f"Model config file not found at {config_save_path}. Did you run preprocessing and feature extraction steps?"
-    )
-    sys.exit(1)
 
+# Load the config from json
+config = load_config_from_json(config_save_path)
 config.data.training_files = os.path.join(experiment_dir, "filelist.txt")
+
 
 # AMP precision / dtype init
 if config.train.bf16_run:
@@ -143,13 +132,14 @@ elif config.train.fp16_run:
 else:
     train_dtype = torch.float32
 
+
 # Globals ( do not touch these. )
 global_step = 0
 d_updates_per_step = 2 if double_d_update else 1
 warmup_completed = False
 from_scratch = False
 use_lr_scheduler = lr_scheduler != "none"
-lora_rank = lora_rank if use_lora else None
+
 
 # Torch backends config
 torch.backends.cuda.matmul.allow_tf32 = use_tf32
@@ -157,124 +147,22 @@ torch.backends.cudnn.allow_tf32 = use_tf32
 torch.backends.cudnn.benchmark = use_benchmark
 torch.backends.cudnn.deterministic = use_deterministic
 
+
 # Globals ( tweakable )
 randomized = True
 benchmark_mode = False
 enable_persistent_workers = True
 debug_shapes = False
 
+
 # EXPERIMENTAL
 c_stft = 21.0 # 18.0
 
 
+##################################################################
+
 import logging
 logging.getLogger("torch").setLevel(logging.ERROR)
-
-# --------------------------   Custom functions land in here   --------------------------
-
-
-# Mel spectrogram similarity metric ( Predicted ∆ Real ) using L1 loss
-def mel_spec_similarity(y_hat_mel, y_mel):
-    # Ensure both tensors are on the same device
-    device = y_hat_mel.device
-    y_mel = y_mel.to(device)
-
-    # Trim or pad tensors to the same shape (based on your preference)
-    if y_hat_mel.shape != y_mel.shape:
-        trimmed_shape = tuple(min(dim_a, dim_b) for dim_a, dim_b in zip(y_hat_mel.shape, y_mel.shape))
-        y_hat_mel = y_hat_mel[..., :trimmed_shape[-1]]
-        y_mel = y_mel[..., :trimmed_shape[-1]]
-    
-    # Calculate the L1 loss between the generated mel and original mel spectrograms
-    loss_mel = F.l1_loss(y_hat_mel, y_mel)
-
-    # Convert the L1 loss to a similarity score between 0 and 100
-    mel_spec_similarity = 100.0 - (loss_mel * 100.0)
-
-    # Clip the similarity percentage to ensure it stays within the desired range
-    mel_spec_similarity = mel_spec_similarity.clamp(0.0, 100.0)
-
-    return mel_spec_similarity
-
-# Tensorboard flusher
-def flush_writer(writer, rank):
-    """
-    Flush the TensorBoard writer if on rank 0.
-    
-    Args:
-        writer (SummaryWriter): TensorBoard SummaryWriter
-        rank (int): process rank (only rank==0 flushes)
-    """
-    if rank == 0 and writer is not None:
-        writer.flush()
-
-# Tensorboard flusher for grad monitoring - currently has no use.
-def flush_writer_grad(writer, rank, global_step):
-    """
-    Flush the TensorBoard writer every 10 steps and if on rank 0.
-    Dedicated for per-step gradient norm logging.
-    Args:
-        writer (SummaryWriter): TensorBoard SummaryWriter
-        rank (int): process rank (only rank==0 flushes)
-    """
-    if rank == 0 and writer is not None and global_step % 10 == 0:
-        writer.flush()
-
-# To make sure that an interrupt like Ctrl+C doesn’t flush by accident
-def block_tensorboard_flush_on_exit(writer):
-    def handler(signum, frame):
-        print("[Warning] Training interrupted. Skipping flush to avoid partial logs.")
-        try:
-            writer.close()  # Close safely, no flush here.
-        except:
-            pass
-        os._exit(1)
-
-    signal.signal(signal.SIGINT, handler)   # for ' Ctrl+C '
-    signal.signal(signal.SIGTERM, handler)  # for kill / terminate
-
-# Scale-Invariant Signal-to-Distortion Ratio ( SI-SDR ) scoring 
-def si_sdr(preds, target, eps=1e-8):
-    """Scale-Invariant SDR"""
-    preds = preds - preds.mean(dim=-1, keepdim=True)
-    target = target - target.mean(dim=-1, keepdim=True)
-
-    target_energy = (target ** 2).sum(dim=-1, keepdim=True)
-    scaling_factor = (preds * target).sum(dim=-1, keepdim=True) / (target_energy + eps)
-    projection = scaling_factor * target
-
-    noise = preds - projection
-
-    si_sdr_value = 10 * torch.log10((projection ** 2).sum(dim=-1) / (noise ** 2).sum(dim=-1) + eps)
-
-    return si_sdr_value.mean()
-
-# Mel spectrogram torch helper ( waveform -> spec -> mel spec ):
-def wave_to_mel(waveform, half):
-    mel_spec = mel_spectrogram_torch(
-        waveform.float().squeeze(1),
-        config.data.filter_length,
-        config.data.n_mel_channels,
-        config.data.sample_rate,
-        config.data.hop_length,
-        config.data.win_length,
-        config.data.mel_fmin,
-        config.data.mel_fmax,
-    )
-    if half == torch.float16:
-        mel_spec = mel_spec.half()
-    elif half == torch.float32 or half == torch.bfloat16:
-        pass
-
-    return mel_spec
-
-def small_model_naming(model_name, epoch, global_step, lora_rank=None):
-    if use_lora and lora_rank:
-        return f"{model_name}_{epoch}e_{global_step}s_{lora_rank}rank.pth"
-    else:
-        return f"{model_name}_{epoch}e_{global_step}s.pth"
-
-# --------------------------   Custom functions End here   --------------------------
 
 
 class EpochRecorder:
@@ -295,249 +183,10 @@ class EpochRecorder:
         elapsed_time = round(elapsed_time, 1)
         elapsed_time_str = str(datetime.timedelta(seconds=int(elapsed_time)))
         current_time = datetime.datetime.now().strftime("%H:%M:%S")
+
         return f"Current time: {current_time} | Time per epoch: {elapsed_time_str}"
 
-
-def verify_remap_checkpoint(checkpoint_path, model, architecture):
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    checkpoint_state_dict = checkpoint["model"]
-    print(f"Verifying checkpoint for selected architecture: {architecture}")
-
-    strict_mode = not use_lora
-
-    try:
-        if architecture == "RVC":
-            if hasattr(model, "module"):
-                model.module.load_state_dict(checkpoint_state_dict, strict=strict_mode)
-            else:
-                model.load_state_dict(checkpoint_state_dict, strict=strict_mode)
-        elif architecture in ["Fork", "Fork/Applio"]:
-            print("Non-RVC architecture pretrains detected. Checking for old keys...")
-            
-            # Check for old keys and remap them if found
-            if any(key.endswith(".weight_v") for key in checkpoint_state_dict.keys()) and \
-               any(key.endswith(".weight_g") for key in checkpoint_state_dict.keys()):
-                print("Old keys detected. Converting .weight_v and .weight_g to new format...")
-                checkpoint_state_dict = replace_keys_in_dict(
-                    checkpoint_state_dict,
-                    ".weight_v",
-                    ".parametrizations.weight.original1"
-                )
-                print("Remapping `.weight_v` keys completed.")
-                checkpoint_state_dict = replace_keys_in_dict(
-                    checkpoint_state_dict,
-                    ".weight_g",
-                    ".parametrizations.weight.original0"
-                )
-                print("Remapping `.weight_g` keys completed.")
-            else:
-                print("No old keys detected. Proceeding without remapping.")
-            
-            # Load the state dictionary after remapping
-            if hasattr(model, "module"):
-                model.module.load_state_dict(checkpoint_state_dict, strict=strict_mode)
-            else:
-                model.load_state_dict(checkpoint_state_dict, strict=strict_mode)
-
-    except RuntimeError as e:
-        error_message = str(e)
-        if "size mismatch for" in error_message:
-            print("\nError: A size mismatch was detected between the checkpoint and the model.")
-            print("This usually means the model's architecture or sample rate is different from the checkpoint's.")
-            print("Please check your model settings.")
-            print("Detailed mismatch report:")
-            for mismatch in error_message.split("\n"):
-                if "size mismatch for" in mismatch:
-                    print(f"  - {mismatch.strip()}")
-        elif "Missing key(s) in state_dict:" in error_message or "Unexpected key(s) in state_dict:" in error_message:
-            print("\nError: Key mismatch detected. The checkpoint's parameters do not match the model's.")
-            print("This may be due to a different architecture or a corrupted checkpoint.")
-            print("Missing or unexpected keys details:")
-            print(error_message)
-        else:
-            print(f"An unknown runtime error occurred when loading the checkpoint.")
-            print(f"Please check your model settings for compatibility with the checkpoint.")
-            print(f"Original PyTorch error: {e}")
-        
-        sys.exit(1)
-    else:
-        del checkpoint
-        del checkpoint_state_dict
-        print("Checkpoint successfully verified and loaded.")
-
-
-def main():
-    """
-    Main function to start the training process.
-    """
-    global gpus
-
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = str(randint(20000, 55555))
-    # Check sample rate
-    wavs = glob.glob(
-        os.path.join(os.path.join(experiment_dir, "sliced_audios"), "*.wav")
-    )
-    if wavs:
-        _, sr = load_wav_to_torch(wavs[0])
-        if sr != sample_rate:
-            print(
-                f"Error: Pretrained model sample rate ({sample_rate} Hz) does not match dataset audio sample rate ({sr} Hz)."
-            )
-            os._exit(1)
-    else:
-        print("No wav file found.")
-
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        gpus = [int(item) for item in gpus.split("-")]
-        n_gpus = len(gpus) 
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-        gpus = [0]
-        n_gpus = 1
-    else:
-        device = torch.device("cpu")
-        gpus = [0]
-        n_gpus = 1
-        print("No GPU detected, fallback to CPU. This will take a very long time...")
-
-    def start():
-        """
-        Starts the training process with multi-GPU support or CPU.
-        """
-        children = []
-
-        for rank, device_id in enumerate(gpus):
-            subproc = mp.Process(
-                target=run,
-                args=(
-                    rank,
-                    n_gpus,
-                    experiment_dir,
-                    pretrainG,
-                    pretrainD,
-                    total_epoch,
-                    save_every_weights,
-                    config,
-                    device,
-                    device_id,
-                ),
-            )
-            children.append(subproc)
-            subproc.start()
-            pid_data["process_pids"].append(subproc.pid)
-
-        for i in range(n_gpus):
-            children[i].join()
-
-    if cleanup:
-        print("Removing files from the previous training attempt...")
-
-        # Clean up unnecessary files
-        for root, dirs, files in os.walk(os.path.join(now_dir, "logs", model_name), topdown=False):
-            for name in files:
-                file_path = os.path.join(root, name)
-                file_name, file_extension = os.path.splitext(name)
-                if (
-                    file_extension == ".0"
-                    or (file_name.startswith("D_") and file_extension == ".pth")
-                    or (file_name.startswith("G_") and file_extension == ".pth")
-                    or (file_name.startswith("added") and file_extension == ".index")
-                ):
-                    os.remove(file_path)
-            for name in dirs:
-                if name == "eval":
-                    folder_path = os.path.join(root, name)
-                    for item in os.listdir(folder_path):
-                        item_path = os.path.join(folder_path, item)
-                        if os.path.isfile(item_path):
-                            os.remove(item_path)
-                    os.rmdir(folder_path)
-
-        print("Cleanup done!")
-
-    start()
-
-
-def run(
-    rank,
-    n_gpus,
-    experiment_dir,
-    pretrainG,
-    pretrainD,
-    custom_total_epoch,
-    custom_save_every_weights,
-    config,
-    device,
-    device_id,
-):
-    """
-    Runs the training loop on a specific GPU or CPU.
-
-    Args:
-        rank (int): The rank of the current process within the distributed training setup.
-        n_gpus (int): The total number of GPUs available for training.
-        experiment_dir (str): The directory where experiment logs and checkpoints will be saved.
-        pretrainG (str): Path to the pre-trained generator model.
-        pretrainD (str): Path to the pre-trained discriminator model.
-        custom_total_epoch (int): The total number of epochs for training.
-        custom_save_every_weights (int): The interval (in epochs) at which to save model weights.
-        config (object): Configuration object containing training parameters.
-        device (torch.device): The device to use for training (CPU or GPU).
-    """
-    global global_step, warmup_completed, optimizer_choice, from_scratch, lora_rank
-
-
-    if 'warmup_completed' not in globals():
-        warmup_completed = False
-
-    # Warmup init msg:
-    if rank == 0 and use_warmup:
-        print(f"    ██████  Warmup Enabled for: {warmup_duration} epochs.")
-
-    # Precision init msg:
-    if not (config.train.bf16_run or config.train.fp16_run):
-        if torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32:
-            print("    ██████  PRECISION: TF32")
-        else:
-            print("    ██████  PRECISION: FP32")
-    elif config.train.bf16_run:
-        if torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32:
-            print("    ██████  PRECISION: TF32 / BF16 - AMP")
-        else:
-            print("    ██████  PRECISION: FP32 / BF16 - AMP")
-    elif config.train.fp16_run:
-        print("    ██████  PRECISION: FP32 / BF16 - AMP")
-
-    # backends.cudnn checks:
-        # For benchmark:
-    if torch.backends.cudnn.benchmark:
-        print("    ██████  cudnn.benchmark: True")
-    else:
-        print("    ██████  cudnn.benchmark: False")
-        # For deterministic:
-    if torch.backends.cudnn.deterministic:
-        print("    ██████  cudnn.deterministic: True")
-    else:
-        print("    ██████  cudnn.deterministic: False")
-
-    # optimizer check:
-    print(f"    ██████  Optimizer used: {optimizer_choice}")
-
-    # Training strategy checks:
-    if d_updates_per_step == 2:
-        print("    ██████  Double-update for Discriminator: Yes")
-
-    # Validation check:
-    print(f"    ██████  Using Validation: {use_validation}")
-
-    if use_lr_scheduler:
-        if lr_scheduler == "exp decay":
-            print(f"    ██████  lr scheduler: exponential lr decay with gamma of: {exp_decay_gamma}")
-        if lr_scheduler == "cosine annealing":
-            print(f"    ██████  lr scheduler: cosine annealing")
-
+def setup_env_and_distr(rank, n_gpus, device, device_id, config):
     if rank == 0:
         writer_eval = SummaryWriter(
             log_dir=os.path.join(experiment_dir, "eval"),
@@ -555,46 +204,41 @@ def run(
     )
 
     torch.manual_seed(config.train.seed)
-
     if torch.cuda.is_available():
         torch.cuda.set_device(device_id)
 
-    # Create datasets and dataloaders
+    return writer_eval
+
+def prepare_dataloaders(config, n_gpus, rank, batch_size, use_validation, benchmark_mode):
     from data_utils import (
         DistributedBucketSampler,
         TextAudioCollateMultiNSFsid,
-        TextAudioLoaderMultiNSFsid,
+        TextAudioLoaderMultiNSFsid
     )
-
-    collate_fn = TextAudioCollateMultiNSFsid()
 
     if not benchmark_mode and use_validation:
         full_dataset = TextAudioLoaderMultiNSFsid(config.data)
-
-        # Split dataset
         train_len = int(0.90 * len(full_dataset))
         val_len = len(full_dataset) - train_len
         train_dataset, val_dataset = torch.utils.data.random_split(
-            full_dataset,
-            [train_len, val_len],
-            generator=torch.Generator().manual_seed(config.train.seed),
+            full_dataset, [train_len, val_len], generator=torch.Generator().manual_seed(config.train.seed)
         )
-
         train_dataset.lengths = [full_dataset.lengths[i] for i in train_dataset.indices]
         val_dataset.lengths = [full_dataset.lengths[i] for i in val_dataset.indices]
     else:
         train_dataset = TextAudioLoaderMultiNSFsid(config.data)
+        val_dataset = None
 
-    # Distributed sampler and loader for train set
     train_sampler = DistributedBucketSampler(
         train_dataset,
         batch_size * n_gpus,
         [50, 100, 200, 300, 400, 500, 600, 700, 800, 900],
         num_replicas=n_gpus,
         rank=rank,
-        shuffle=True,
+        shuffle=True
     )
 
+    collate_fn = TextAudioCollateMultiNSFsid()
     train_loader = DataLoader(
         train_dataset,
         num_workers=4,
@@ -603,72 +247,30 @@ def run(
         collate_fn=collate_fn,
         batch_sampler=train_sampler,
         persistent_workers=enable_persistent_workers,
-        prefetch_factor=8,
+        prefetch_factor=8
     )
-    if not benchmark_mode and use_validation:
-        # Distributed sampler and loader for eval set
+    val_loader = None
+    if val_dataset:
         val_sampler = DistributedBucketSampler(
             val_dataset,
             batch_size * n_gpus,
             [50, 100, 200, 300, 400, 500, 600, 700, 800, 900],
             num_replicas=n_gpus,
             rank=rank,
-            shuffle=False, # Off for validation purposes.
+            shuffle=False
         )
         val_loader = DataLoader(
-            val_dataset,
-            batch_sampler=val_sampler,
-            shuffle=False,
-            collate_fn=collate_fn,
-            num_workers=1,
-            pin_memory=True,
+            val_dataset, batch_sampler=val_sampler, shuffle=False, collate_fn=collate_fn,
+            num_workers=1, pin_memory=True
         )
+    
+    train_loader_safety(benchmark_mode, train_loader)
 
-    if not benchmark_mode:
-        # train_loader safety check
-        if len(train_loader) < 3:
-            print(
-                "Not enough data present in the training set. Perhaps you didn't slice the audio files? ( Preprocessing step )"
-            )
-            os._exit(2333333)
+    return train_loader, val_loader
 
-    # Embedder / spk_dim alignment
-    embedder_name = "contentvec" # Default embedder
-    spk_dim = config.model.spk_embed_dim  # 109 default speakers
-    try:
-        with open(model_info_path, "r") as f:
-            model_info = json.load(f)
-            embedder_name = model_info["embedder_model"]
-            spk_dim = model_info["speakers_id"]
-    except Exception as e:
-        print(f"Could not load model info file: {e}. Using defaults.")
-
-    # Try to load speaker dim from latest checkpoint or pretrainG
-    try:
-        last_g = latest_checkpoint_path(experiment_dir, "G_*.pth")
-        chk_path = (last_g if last_g else (pretrainG if pretrainG not in ("", "None") else None))
-        if chk_path:
-            ckpt = torch.load(chk_path, map_location="cpu", weights_only=True)
-            spk_dim = ckpt["model"]["emb_g.weight"].shape[0]
-            del ckpt
-
-    except Exception as e:
-        print(f"Failed to load checkpoint: {e}. Using default number of speakers.")
-
-    # update config before the model init
-    print(f"    ██████  Initializing the generator with: {spk_dim} speakers.")
-    config.model.spk_embed_dim = spk_dim
-
-
-    # Finetuning mode
-    if use_lora:
-        print(f"    ██████  Finetuning mode: LoRA with rank: {lora_rank}")
-    else:
-        print(f"    ██████  Finetuning mode: Full")
-
-    # Initialize generator
+def get_g_model(config, sample_rate, vocoder, use_checkpointing, randomized):
     from rvc.lib.algorithm.synthesizers import Synthesizer
-    net_g = Synthesizer(
+    return Synthesizer(
         config.data.filter_length // 2 + 1,
         config.train.segment_size // config.data.hop_length,
         **config.model,
@@ -679,32 +281,34 @@ def run(
         randomized = randomized,
     )
 
-    # Initialize discriminator/s
+def get_d_model(config, vocoder, use_checkpointing):
     if vocoder == "RingFormer":
-        # MultiPeriodDiscriminator + MultiResolutionDiscriminator + MultiScaleDiscriminator ( unified ) - RingFormer architecture v1
         from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_Combined
-        net_d = MPD_MSD_MRD_Combined(config.model.use_spectral_norm, use_checkpointing=use_checkpointing, **dict(config.mrd))
-    else:
-        # MultiPeriodDiscriminator + MultiScaleDiscriminator ( unified ) - Original RVC Setup
+        # MPD + MSD + MRD ( unified ) - RingFormer architecture v1
+        return MPD_MSD_MRD_Combined(
+            config.model.use_spectral_norm,
+            use_checkpointing=use_checkpointing,
+            **dict(config.mrd)
+        )
+    else: # For HiFi-GAN, RefineGan or MRF-HiFi-GAN
         from rvc.lib.algorithm.discriminators.multi import MPD_MSD_Combined
-        net_d = MPD_MSD_Combined(
-            config.model.use_spectral_norm, use_checkpointing=use_checkpointing
+        # MPD + MSD ( unified ) - Original RVC Setup
+        return MPD_MSD_Combined(
+            config.model.use_spectral_norm,
+            use_checkpointing=use_checkpointing
         )
 
-    # Moving models to device
-    if torch.cuda.is_available():
-        net_g = net_g.cuda(device_id)
-        net_d = net_d.cuda(device_id)
-    else:
-        net_g = net_g.to(device)
-        net_d = net_d.to(device)
-
-    # Hann window for stft 
-    if vocoder == "RingFormer":
-        hann_window = torch.hann_window(config.model.gen_istft_n_fft).to(device)
-    else:
-        hann_window = None
-
+def get_optimizers(
+    net_g,
+    net_d,
+    config,
+    optimizer_choice,
+    custom_lr_g,
+    custom_lr_d,
+    use_custom_lr,
+    total_epoch_count,
+    train_loader
+):
     # Base / Common kwargs for gen and disc
     common_args_g = dict(
         lr=custom_lr_g if use_custom_lr else config.train.learning_rate,
@@ -718,26 +322,24 @@ def run(
         eps=1e-9,
         weight_decay=0,
     )
-    common_args_g_adamw_bfloat16 = dict(
+    common_args_g_bf16 = dict(
         lr=custom_lr_g if use_custom_lr else config.train.learning_rate,
         betas=(0.8, 0.99),
         eps=1e-9,
-        weight_decay= 0.0, # 0.001,   # tried: 0.0001, 0.00001  ( default: # 0.0,
+        weight_decay=0.0,
         use_kahan_summation=True,
     )
-    common_args_d_adamw_bfloat16 = dict(
+    common_args_d_bf16 = dict(
         lr=custom_lr_d if use_custom_lr else config.train.learning_rate,
         betas=(0.8, 0.99),
         eps=1e-9,
-        weight_decay= 0.0, # 0.001,   # tried: 0.0001, 0.00001  ( default: # 0.0,
+        weight_decay=0.0,
         use_kahan_summation=True,
     )
-
     if optimizer_choice == "Ranger21":
         from rvc.train.custom_optimizers.ranger21 import Ranger21
-
         ranger_args = dict(
-            num_epochs=custom_total_epoch,
+            num_epochs=total_epoch_count,
             num_batches_per_epoch=len(train_loader),
             use_madgrad=False,
             use_warmup=False,
@@ -754,21 +356,22 @@ def run(
             gc_conv_only=True,
             using_normgc=False,
         )
-        optim_g = Ranger21(net_g.parameters(), **common_args_g, **ranger_args)
+        optim_g = Ranger21(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g, **ranger_args)
         optim_d = Ranger21(net_d.parameters(), **common_args_d, **ranger_args)
 
     elif optimizer_choice == "RAdam":
-        optim_g = torch_optimizer.RAdam(net_g.parameters(), **common_args_g)
+        import torch_optimizer
+        optim_g = torch_optimizer.RAdam(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g)
         optim_d = torch_optimizer.RAdam(net_d.parameters(), **common_args_d)
 
     elif optimizer_choice == "AdamW":
-        optim_g = torch.optim.AdamW(net_g.parameters(), **common_args_g)
+        optim_g = torch.optim.AdamW(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g)
         optim_d = torch.optim.AdamW(net_d.parameters(), **common_args_d)
+
     elif optimizer_choice == "AdamW_BF16":
-        # BF16 friendly AdamW variant
         from rvc.train.custom_optimizers.adamw_bfloat import BFF_AdamW
-        optim_g = BFF_AdamW(net_g.parameters(), **common_args_g_adamw_bfloat16)
-        optim_d = BFF_AdamW(net_d.parameters(), **common_args_d_adamw_bfloat16)
+        optim_g = BFF_AdamW(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g_bf16)
+        optim_d = BFF_AdamW(net_d.parameters(), **common_args_d_bf16)
 
     elif optimizer_choice == "Prodigy":
         from rvc.train.custom_optimizers.prodigy import Prodigy
@@ -777,31 +380,296 @@ def run(
             weight_decay=0.0,
             decouple=True,
         )
-        optim_g = Prodigy(net_g.parameters(), lr=custom_lr_g if use_custom_lr else 1.0, **prodigy_args)
+        optim_g = Prodigy(filter(lambda p: p.requires_grad, net_g.parameters()), lr=custom_lr_g if use_custom_lr else 1.0, **prodigy_args)
         optim_d = Prodigy(net_d.parameters(), lr=custom_lr_d if use_custom_lr else 1.0, **prodigy_args)
 
     elif optimizer_choice == "DiffGrad":
         from rvc.train.custom_optimizers.diffgrad import diffgrad
-        optim_g = diffgrad(net_g.parameters(), **common_args_g)
+        optim_g = diffgrad(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g)
         optim_d = diffgrad(net_d.parameters(), **common_args_d)
 
-    '''
-    - Template for adding custom optims:
+    else:
+        raise ValueError(f"Unknown optimizer choice: {optimizer_choice}")
+    return optim_g, optim_d
 
-    elif optimizer_choice =="new_optim":
-        extra_args = dict(
-            first = 0.123,
-            second = 123,
-            third = 0.123123,
+def setup_models_for_training(net_g, net_d, device, device_id, n_gpus):
+    net_g = net_g.to(device_id) if device.type == "cuda" else net_g.to(device)
+    net_d = net_d.to(device_id) if device.type == "cuda" else net_d.to(device)
+    if n_gpus > 1 and device.type == "cuda":
+        net_g = DDP(net_g, device_ids=[device_id]) # find_unused_parameters=True)
+        net_d = DDP(net_d, device_ids=[device_id]) # find_unused_parameters=True)
+
+    return net_g, net_d
+
+def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkpointing, randomized, sample_rate, optimizer_choice, custom_lr_g, custom_lr_d, use_custom_lr, total_epoch_count, train_loader, device, device_id, n_gpus, rank):
+    try:
+        print("    ██████  Starting the training ...")
+
+        # Confirm presence of checkpoints
+        g_checkpoint_path = latest_checkpoint_path(experiment_dir, "G_*.pth")
+        d_checkpoint_path = latest_checkpoint_path(experiment_dir, "D_*.pth")
+
+        # If they exist, we attempt to resume the training
+        if g_checkpoint_path and d_checkpoint_path:
+
+            # Init the models
+            net_g = get_g_model(config, sample_rate, vocoder, use_checkpointing, randomized)
+            net_d = get_d_model(config, vocoder, use_checkpointing)
+
+
+            # Init the optimizers
+            optim_g, optim_d = get_optimizers(net_g, net_d, config, optimizer_choice, custom_lr_g, custom_lr_d, use_custom_lr, total_epoch_count, train_loader)
+
+            # Move the models to an appropriate device ( And optionally wrap with DDP for multi-gpu )
+            net_g, net_d = setup_models_for_training(net_g, net_d, device, device_id, n_gpus)
+
+            # Load the model and optim states
+            _, _, _, epoch_str = load_checkpoint(architecture, g_checkpoint_path, net_g, optim_g)
+            _, _, _, epoch_str = load_checkpoint(architecture, d_checkpoint_path, net_d, optim_d)
+
+            epoch_str += 1
+            global_step = (epoch_str - 1) * len(train_loader)
+            print(f"[RESUMING] (G) & (D) at global_step: {global_step} and epoch count: {epoch_str - 1}")
+        else:
+            raise FileNotFoundError("No checkpoints found.")
+
+    except FileNotFoundError:
+    # If no checkpoints are available, using the Pretrains directly
+        epoch_str = 1
+        global_step = 0
+
+        # Init the models
+        net_g = get_g_model(config, sample_rate, vocoder, use_checkpointing, randomized)
+        net_d = get_d_model(config, vocoder, use_checkpointing)
+
+        # Loading the pretrained Generator model
+        if (pretrainG != "" and pretrainG != "None"):
+            if rank == 0:
+                print(f"Loading pretrained (G) '{pretrainG}'")
+            verify_remap_checkpoint(pretrainG, net_g, architecture)
+
+
+        # Loading the pretrained Discriminator model
+        if pretrainD != "" and pretrainD != "None":
+            if rank == 0:
+                print(f"Loading pretrained (D) '{pretrainD}'")
+            verify_remap_checkpoint(pretrainD, net_d, architecture)
+
+        # Load the models and optionally wrap with DDP
+        net_g, net_d = setup_models_for_training(net_g, net_d, device, device_id, n_gpus)
+        # Init the optimizers
+        optim_g, optim_d = get_optimizers(net_g, net_d, config, optimizer_choice, custom_lr_g, custom_lr_d, use_custom_lr, total_epoch_count, train_loader)
+    return net_g, net_d, optim_g, optim_d, epoch_str, global_step
+
+def prepare_schedulers(optim_g, optim_d, use_warmup, warmup_duration, use_lr_scheduler, lr_scheduler, exp_decay_gamma, total_epoch_count, epoch_str):
+    warmup_scheduler_g, warmup_scheduler_d = None, None
+    scheduler_g, scheduler_d = None, None
+
+    if use_warmup:
+        warmup_scheduler_g = torch.optim.lr_scheduler.LambdaLR(
+            optim_g, lr_lambda=lambda epoch: min(1.0, (epoch + 1) / warmup_duration)
         )
-        optim_g = new_optim(net_g.parameters(), **common_args_g, **extra_args)
-        optim_d = new_optim(net_d.parameters(), **common_args_d, **extra_args)
+        warmup_scheduler_d = torch.optim.lr_scheduler.LambdaLR(
+            optim_d, lr_lambda=lambda epoch: min(1.0, (epoch + 1) / warmup_duration)
+        )
 
-        Or for chained disc optim:
-        combined_disc_params = itertools.chain(net_d_A.parameters(), net_d_B.parameters())
-        optim_d = new_optim(combined_disc_params, **common_args_d, **extra_args)
-    '''
+    if not use_warmup:
+        for param_group in optim_g.param_groups: # For Generator
+            if 'initial_lr' not in param_group:
+                param_group['initial_lr'] = param_group['lr']
+        for param_group in optim_d.param_groups: # For Discriminator
+            if 'initial_lr' not in param_group:
+                param_group['initial_lr'] = param_group['lr']
 
+    if use_lr_scheduler:
+        if lr_scheduler == "exp decay":
+            # Exponential decay lr scheduler
+            scheduler_g = torch.optim.lr_scheduler.ExponentialLR( optim_g, gamma=exp_decay_gamma, last_epoch=epoch_str - 1 )
+            scheduler_d = torch.optim.lr_scheduler.ExponentialLR( optim_d, gamma=exp_decay_gamma, last_epoch=epoch_str - 1 )
+        elif lr_scheduler == "cosine annealing":
+            scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR( optim_g, T_max=total_epoch_count, eta_min=3e-5, last_epoch=epoch_str - 1 )
+            scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR( optim_d, T_max=total_epoch_count, eta_min=3e-5, last_epoch=epoch_str - 1 )
+
+    return warmup_scheduler_g, warmup_scheduler_d, scheduler_g, scheduler_d
+
+def get_reference_sample(train_loader, device, config):
+    reference_path = os.path.join("logs", "reference")
+    use_custom_ref = all([
+        os.path.isfile(os.path.join(reference_path, "ref_feats.npy")),
+        os.path.isfile(os.path.join(reference_path, "ref_f0c.npy")),
+        os.path.isfile(os.path.join(reference_path, "ref_f0f.npy")),
+    ])
+
+    if use_custom_ref:
+        print("[REFERENCE] Using custom reference input from 'logs\\reference\\'")
+
+        phone = torch.FloatTensor(np.repeat(np.load(os.path.join(reference_path, "ref_feats.npy")), 2, axis=0)).unsqueeze(0).to(device)
+        pitch = torch.LongTensor(np.load(os.path.join(reference_path, "ref_f0c.npy"))).unsqueeze(0).to(device)
+        pitchf = torch.FloatTensor(np.load(os.path.join(reference_path, "ref_f0f.npy"))).unsqueeze(0).to(device)
+
+        min_len = min(phone.shape[1], pitch.shape[1], pitchf.shape[1])
+
+        phone, pitch, pitchf = phone[:, :min_len, :], pitch[:, :min_len], pitchf[:, :min_len]
+        phone_lengths = torch.LongTensor([phone.shape[1]]).to(device)
+
+        sid = torch.LongTensor([0]).to(device)
+    else:
+        print("[REFERENCE] No custom reference found. Fetching from the first batch of the train_loader.")
+
+        info = next(iter(train_loader))
+        phone, phone_lengths, pitch, pitchf, _, _, _, _, sid = info
+        phone, phone_lengths, pitch, pitchf, sid = phone.to(device), phone_lengths.to(device), pitch.to(device), pitchf.to(device), sid.to(device)
+
+        batch_indices = []
+        for batch in train_loader.batch_sampler:
+            batch_indices = batch
+            break
+
+        if isinstance(train_loader.dataset, torch.utils.data.Subset):
+            file_paths = train_loader.dataset.dataset.get_file_paths(batch_indices)
+        else:
+            file_paths = train_loader.dataset.get_file_paths(batch_indices)
+
+        file_name = os.path.basename(file_paths[0])
+        print(f"[REFERENCE] Origin of the ref: {file_name}")
+
+    return (phone, phone_lengths, pitch, pitchf, sid, config.train.seed)
+
+def main():
+    """
+    Main function to start the training process.
+    """
+    global gpus
+
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = str(randint(20000, 55555))
+
+    wavs = glob.glob(os.path.join(os.path.join(experiment_dir, "sliced_audios"), "*.wav"))
+    if wavs:
+        _, sr = load_wav_to_torch(wavs[0])
+        if sr != sample_rate:
+            print(f"Error: Pretrained model sample rate ({sample_rate} Hz) does not match dataset audio sample rate ({sr} Hz).")
+            os._exit(1)
+    else:
+        print("No wav file found.")
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        gpus = [int(item) for item in gpus.split("-")]
+        n_gpus = len(gpus) 
+    else:
+        device = torch.device("cpu")
+        gpus = [0]
+        n_gpus = 1
+        print("No GPU detected, fallback to CPU. This will take a very long time ...")
+
+    def start():
+        """
+        Starts the training process with multi-GPU support or CPU.
+        """
+        children = []
+
+        for rank, device_id in enumerate(gpus):
+            subproc = mp.Process(
+                target=run,
+                args=(
+                    rank,
+                    n_gpus,
+                    experiment_dir,
+                    pretrainG,
+                    pretrainD,
+                    total_epoch_count,
+                    epoch_save_frequency,
+                    save_weight_models,
+                    save_only_latest_net_models,
+                    config,
+                    device,
+                    device_id,
+                ),
+            )
+            children.append(subproc)
+            subproc.start()
+            pid_data["process_pids"].append(subproc.pid)
+
+        for i in range(n_gpus):
+            children[i].join()
+
+    if cleanup:
+        old_session_cleanup(now_dir, model_name)
+    start()
+
+def run(
+    rank,
+    n_gpus,
+    experiment_dir,
+    pretrainG,
+    pretrainD,
+    total_epoch_count,
+    epoch_save_frequency,
+    save_weight_models,
+    save_only_latest_net_models,
+    config,
+    device,
+    device_id,
+):
+    """
+    Runs the training loop on a specific GPU or CPU.
+
+    Args:
+        rank (int): The rank of the current process within the distributed training setup.
+        n_gpus (int): The total number of GPUs available for training.
+        experiment_dir (str): The directory where experiment logs and checkpoints will be saved.
+        pretrainG (str): Path to the pre-trained generator model.
+        pretrainD (str): Path to the pre-trained discriminator model.
+        total_epoch_count (int): The total number of epochs for training.
+        epoch_save_frequency (int): Frequency of saving epochs.
+        save_weight_models (int): Whether to save small weight models. 0 for no, 1 for yes.
+        save_only_latest_net_models (int): Whether to save only latest G/D or for each epoch.
+        config (object): Configuration object containing training parameters.
+        device (torch.device): The device to use for training (CPU or GPU).
+    """
+    global global_step, warmup_completed, optimizer_choice, from_scratch
+
+    if 'warmup_completed' not in globals():
+        warmup_completed = False
+
+    # Initial print / session info for console
+    print_init_setup(
+        warmup_duration,
+        rank,
+        use_warmup,
+        config,
+        optimizer_choice,
+        d_updates_per_step,
+        use_validation,
+        lr_scheduler,
+        exp_decay_gamma
+    )
+
+    # Initial setup
+    writer_eval = setup_env_and_distr(
+        rank,
+        n_gpus,
+        device,
+        device_id,
+        config
+    )
+
+    # Dataloading and loaders preparation
+    train_loader, val_loader = prepare_dataloaders(
+        config,
+        n_gpus,
+        rank,
+        batch_size,
+        use_validation,
+        benchmark_mode
+    )
+
+    # Spk dim verif
+    spk_dim = verify_spk_dim(config, model_info_path, experiment_dir, latest_checkpoint_path, rank, pretrainG)
+    config.model.spk_embed_dim = spk_dim
+
+    # Spectral loss init
     if spectral_loss == "L1 Mel Loss":
         fn_spectral_loss = torch.nn.L1Loss()
         print("    ██████  Spectral loss: Single-Scale (L1) Mel loss function")
@@ -830,171 +698,62 @@ def run(
         )
         print("    ██████  Spectral loss: Multi-Resolution STFT loss function")
     else:
-        print(" //// ERROR //// CHOSEN SPECTRAL LOSS IS UNDEFINED / UNSUPPORTED. EXITING.")
+        print("ERROR: Chosen spectral loss is undefined. Exiting.")
         sys.exit(1)
 
-    # Wrap models with DDP for multi-gpu processing
-    if n_gpus > 1 and device.type == "cuda":
-        net_g = DDP(net_g, device_ids=[device_id]) # find_unused_parameters=True)
-        net_d = DDP(net_d, device_ids=[device_id]) # find_unused_parameters=True)
+    # Loading of models and optims
+    net_g, net_d, optim_g, optim_d, epoch_str, global_step = load_models_and_optimizers(
+        config,
+        pretrainG,
+        pretrainD,
+        vocoder,
+        use_checkpointing,
+        randomized,
+        sample_rate, 
+        optimizer_choice,
+        custom_lr_g,
+        custom_lr_d,
+        use_custom_lr, 
+        total_epoch_count,
+        train_loader,
+        device,
+        device_id,
+        n_gpus,
+        rank
+    )
 
-    # If available, resuming from:  D_* and G_* checkpoints
-    try:
-        print("    ██████  Starting the training ...")
-
-        g_checkpoint_path = latest_checkpoint_path(experiment_dir, "G_*.pth")
-        d_checkpoint_path = latest_checkpoint_path(experiment_dir, "D_*.pth")
-
-        if g_checkpoint_path and d_checkpoint_path:
-            if use_lora:
-                lora_config = LoraConfig(
-                    target_modules=["conv_q", "conv_k", "conv_v", "conv_o"],
-                    r=lora_rank,
-                    lora_alpha=lora_rank,
-                    init_lora_weights=False,
-                )
-                net_g.enc_p = get_peft_model(net_g.enc_p, lora_config)
-
-            _, _, _, epoch_str = load_checkpoint(architecture, g_checkpoint_path, net_g, optim_g)
-            _, _, _, epoch_str = load_checkpoint(architecture, d_checkpoint_path, net_d, optim_d)
-
-            epoch_str += 1
-            global_step = (epoch_str - 1) * len(train_loader)
-            print(f"[RESUMING] (G) & (D) at global_step: {global_step} and epoch count: {epoch_str - 1}")
-        else:
-            raise FileNotFoundError("No checkpoints found.")
-    except FileNotFoundError:
-    # If no checkpoints are available, using the Pretrains directly
-        epoch_str = 1
-        global_step = 0
-
-        # Loading the pretrained Generator model
-        if pretrainG != "" and pretrainG != "None":
-            if rank == 0:
-                print(f"Loading pretrained (G) '{pretrainG}'")
-            verify_remap_checkpoint(pretrainG, net_g, architecture)
-
-            # Apply LoRA if use_lora is set to True
-            if use_lora:
-                lora_config = LoraConfig(
-                    target_modules=["conv_q", "conv_k", "conv_v", "conv_o"],
-                    r=lora_rank,
-                    lora_alpha=lora_rank,
-                    init_lora_weights=True,
-                )
-                net_g.enc_p = get_peft_model(net_g.enc_p, lora_config)
-
-        # Loading the pretrained Discriminator model
-        if pretrainD != "" and pretrainD != "None":
-            if rank == 0:
-                print(f"Loading pretrained (D) '{pretrainD}'")
-            verify_remap_checkpoint(pretrainD, net_d, architecture)
-
-    # Check if the training is ' from scratch ' and set appropriate flag
-    if (pretrainG in ["", "None"]) and (pretrainD in ["", "None"]):
+    # from-scratch checker ( disables average loss )
+    if pretrainG in ["", "None"] and pretrainD in ["", "None"]:
         from_scratch = True
         if rank == 0:
             print("    ██████  No pretrains used: Average loss disabled!")
 
-    # Initialize the warmup scheduler only if `use_warmup` is True
-    if use_warmup:
-        warmup_scheduler_g = torch.optim.lr_scheduler.LambdaLR( # Warmup for Generator
-            optim_g,
-            lr_lambda=lambda epoch: (epoch + 1) / warmup_duration if epoch < warmup_duration else 1.0
-        )
-        warmup_scheduler_d = torch.optim.lr_scheduler.LambdaLR( # Warmup for MPD
-            optim_d,
-            lr_lambda=lambda epoch: (epoch + 1) / warmup_duration if epoch < warmup_duration else 1.0
-        )
+    # Prepare the schedulers
+    warmup_scheduler_g, warmup_scheduler_d, scheduler_g, scheduler_d = prepare_schedulers(
+        optim_g,
+        optim_d,
+        use_warmup,
+        warmup_duration,
+        use_lr_scheduler, 
+        lr_scheduler,
+        exp_decay_gamma,
+        total_epoch_count,
+        epoch_str
+    )
 
-    # Ensure initial_lr is set when use_warmup is False
-    if not use_warmup:
-        for param_group in optim_g.param_groups: # For Generator
-            if 'initial_lr' not in param_group:
-                param_group['initial_lr'] = param_group['lr']
-        for param_group in optim_d.param_groups: # For Discriminator
-            if 'initial_lr' not in param_group:
-                param_group['initial_lr'] = param_group['lr']
+    # Hann window for stft ( for RingFormer only. )
+    hann_window = torch.hann_window(config.model.gen_istft_n_fft).to(device) if vocoder == "RingFormer" else None
 
-    if use_lr_scheduler:
-        if lr_scheduler == "exp decay":
-            # Exponential decay lr scheduler
-            scheduler_g = torch.optim.lr_scheduler.ExponentialLR( optim_g, gamma=exp_decay_gamma, last_epoch=epoch_str - 1 )
-            scheduler_d = torch.optim.lr_scheduler.ExponentialLR( optim_d, gamma=exp_decay_gamma, last_epoch=epoch_str - 1 )
-        elif lr_scheduler == "cosine annealing":
-            scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR( optim_g, T_max=custom_total_epoch, eta_min=3e-5, last_epoch=epoch_str - 1 )
-            scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR( optim_d, T_max=custom_total_epoch, eta_min=3e-5, last_epoch=epoch_str - 1 )
+    # GradScaler for FP16 training
+    gradscaler = torch.amp.GradScaler(enabled=(device.type == "cuda" and train_dtype == torch.float16))
 
-    # Init for GradScaler
-    use_gradscaler = device.type == "cuda" and train_dtype == torch.float16
-    gradscaler = torch.amp.GradScaler(enabled=use_gradscaler)
+    # Reference sample for live-infer
+    reference = get_reference_sample(train_loader, device, config)
 
-
-    # Reference sample fetching mechanism:
-    # Feel free to customize the path or namings ( make sure to change em in ' if ' block too. )
-    reference_path = os.path.join("logs", "reference")
-    use_custom_ref = all([
-        os.path.isfile(os.path.join(reference_path, "ref_feats.npy")),    # Features
-        os.path.isfile(os.path.join(reference_path, "ref_f0c.npy")),      # Pitch - Coarse
-        os.path.isfile(os.path.join(reference_path, "ref_f0f.npy")),      # Pitch - Float
-    ])
-
+    # Cache for training with " cache " enabled
     cache = []
 
-    if use_custom_ref:
-        print("Using custom reference input from 'logs\\reference\\'")
-
-        # Load and process
-        phone = np.load(os.path.join(reference_path, "ref_feats.npy"))
-        phone = np.repeat(phone, 2, axis=0)
-        pitch = np.load(os.path.join(reference_path, "ref_f0c.npy"))
-        pitchf = np.load(os.path.join(reference_path, "ref_f0f.npy"))
-
-        # Find minimum length
-        min_len = min(len(phone), len(pitch), len(pitchf))
-        
-        # Trim all to same length
-        phone = phone[:min_len]
-        pitch = pitch[:min_len]
-        pitchf = pitchf[:min_len]
-
-        # Convert to tensors
-        phone = torch.FloatTensor(phone).unsqueeze(0).to(device)
-        phone_lengths = torch.LongTensor([phone.shape[1]]).to(device)
-        pitch = torch.LongTensor(pitch).unsqueeze(0).to(device)
-        pitchf = torch.FloatTensor(pitchf).unsqueeze(0).to(device)
-
-        sid = torch.LongTensor([0]).to(device)
-        reference = (phone, phone_lengths, pitch, pitchf, sid, config.train.seed)
-
-    else:
-        print("[REFERENCE] No custom reference found.")
-        info = next(iter(train_loader))
-        phone, phone_lengths, pitch, pitchf, _, _, _, _, sid = info
-
-        batch_indices = []
-        for batch in train_sampler:
-            batch_indices = batch  # This is the list of indices in the current batch
-            break  # We only need the first batch indices
-
-        if isinstance(train_loader.dataset, torch.utils.data.Subset):
-            file_paths = train_loader.dataset.dataset.get_file_paths(batch_indices)
-        else:
-            file_paths = train_loader.dataset.get_file_paths(batch_indices)
-
-        file_names = [os.path.basename(path) for path in file_paths]
-        print("[REFERENCE] Fetching reference from the first batch of the train_loader")
-        print(f"[REFERENCE] Origin of the ref: {file_names[0]}")
-        reference = (
-            phone.to(device, non_blocking=True),
-            phone_lengths.to(device, non_blocking=True),
-            pitch.to(device, non_blocking=True),
-            pitchf.to(device, non_blocking=True),
-            sid.to(device, non_blocking=True),
-            config.train.seed,
-        )
-
-    for epoch in range(epoch_str, total_epoch + 1):
+    for epoch in range(epoch_str, total_epoch_count + 1):
         training_loop(
             rank,
             epoch,
@@ -1005,8 +764,10 @@ def run(
             val_loader if use_validation else None,
             [writer_eval],
             cache,
-            custom_save_every_weights,
-            custom_total_epoch,
+            total_epoch_count,
+            epoch_save_frequency,
+            save_weight_models,
+            save_only_latest_net_models,
             device,
             device_id,
             reference,
@@ -1016,16 +777,16 @@ def run(
             hann_window,
         )
         if use_warmup and epoch <= warmup_duration:
-            warmup_scheduler_g.step()
-            warmup_scheduler_d.step()
+            if warmup_scheduler_g:
+                warmup_scheduler_g.step()
+            if warmup_scheduler_d:
+                warmup_scheduler_d.step()
 
             # Logging of finished warmup
             if epoch == warmup_duration:
                 warmup_completed = True
                 print(f"    ██████  Warmup completed at epochs: {warmup_duration}")
-                # Gen:
                 print(f"    ██████  LR G: {optim_g.param_groups[0]['lr']}")
-                # Discs:
                 print(f"    ██████  LR D: {optim_d.param_groups[0]['lr']}")
                 # scheduler:
                 if lr_scheduler == "exp decay":
@@ -1033,26 +794,25 @@ def run(
                 elif lr_scheduler == "cosine annealing":
                     print("    ██████  Starting cosine annealing scheduler " )
 
- 
-        if use_lr_scheduler:
+        if use_lr_scheduler and (not use_warmup or warmup_completed):
             # Once the warmup phase is completed, uses exponential lr decay
-            if not use_warmup or warmup_completed:
-                scheduler_g.step()
-                scheduler_d.step()
-
+            scheduler_g.step()
+            scheduler_d.step()
 
 def training_loop(
     rank,
     epoch,
-    hps,
+    config,
     nets,
     optims,
     train_loader,
     val_loader,
     writers,
     cache,
-    custom_save_every_weights,
-    custom_total_epoch,
+    total_epoch_count,
+    epoch_save_frequency,
+    save_weight_models,
+    save_only_latest_net_models,
     device,
     device_id,
     reference,
@@ -1067,14 +827,22 @@ def training_loop(
     Args:
         rank (int): Rank of the current process.
         epoch (int): Current epoch number.
-        hps (Namespace): Hyperparameters.
+        config (object): Configuration object containing training parameters.
         nets (list): List of models [net_g, net_d].
         optims (list): List of optimizers [optim_g, net_d].
         train_loader: training dataloader.
         val_loader: validation dataloader.
         writers (list): List of TensorBoard writers [writer_eval].
         cache (list): List to cache data in GPU memory.
-        use_cpu (bool): Whether to use CPU for training.
+        total_epoch_count (int): The total number of epochs for training.
+        epoch_save_frequency (int): Frequency of saving epochs.
+        save_weight_models (int): Whether to save small weight models. 0 for no, 1 for yes.
+        save_only_latest_net_models (int): Whether to save only latest G/D or for each epoch.
+        device (torch.device): The device to use for training (CPU or GPU).
+        reference (list): Contains reference sample. Either custom or from train loader.
+        fn_spectral_loss: spectral loss;  can be l1, multi-scale or ms-stft.
+        gradscaler: gradscaler for fp16
+        hann_window: hann window used for RingFormer
     """
     global global_step, warmup_completed, dynamic_c_kl
 
@@ -1110,13 +878,8 @@ def training_loop(
 
     if not from_scratch:
         # Tensors init for averaged losses:
-        if vocoder == "RingFormer":
-            tensor_count = 7
-        else:
-            tensor_count = 6
-
+        tensor_count = 7 if vocoder == "RingFormer" else 6
         epoch_loss_tensor = torch.zeros(tensor_count, device=device)
-        multi_epoch_loss_tensor = torch.zeros(tensor_count, device=device)
         num_batches_in_epoch = 0
 
     avg_50_cache = {
@@ -1182,8 +945,8 @@ def training_loop(
             if vocoder == "RingFormer":
                 reshaped_y = y.view(-1, y.size(-1))
                 reshaped_y_hat = y_hat.view(-1, y_hat.size(-1))
-                y_stft = torch.stft(reshaped_y, n_fft=hps.model.gen_istft_n_fft, hop_length=hps.model.gen_istft_hop_size, win_length=hps.model.gen_istft_n_fft, window=hann_window, return_complex=True)
-                y_hat_stft = torch.stft(reshaped_y_hat, n_fft=hps.model.gen_istft_n_fft, hop_length=hps.model.gen_istft_hop_size, win_length=hps.model.gen_istft_n_fft, window=hann_window, return_complex=True)
+                y_stft = torch.stft(reshaped_y, n_fft=config.model.gen_istft_n_fft, hop_length=config.model.gen_istft_hop_size, win_length=config.model.gen_istft_n_fft, window=hann_window, return_complex=True)
+                y_hat_stft = torch.stft(reshaped_y_hat, n_fft=config.model.gen_istft_n_fft, hop_length=config.model.gen_istft_hop_size, win_length=config.model.gen_istft_n_fft, window=hann_window, return_complex=True)
                 target_magnitude = torch.abs(y_stft)  # shape: [B, F, T]
 
             # Discriminator forward pass:
@@ -1225,8 +988,8 @@ def training_loop(
 
                 # Spectral loss ( In code kept referenced as "loss_mel" to avoid confusion in old logs / graphs):
                 if spectral_loss == "L1 Mel Loss":
-                    y_mel = wave_to_mel(y, half=train_dtype)
-                    y_hat_mel = wave_to_mel(y_hat, half=train_dtype)
+                    y_mel = wave_to_mel(config, y, half=train_dtype)
+                    y_hat_mel = wave_to_mel(config, y_hat, half=train_dtype)
                     loss_mel = fn_spectral_loss(y_mel, y_hat_mel) * config.train.c_mel
                 elif spectral_loss == "Multi-Scale Mel Loss":
                     loss_mel = fn_spectral_loss(y, y_hat) * config.train.c_mel / 3.0
@@ -1389,7 +1152,7 @@ def training_loop(
             y_mel = mel
 
         # used for tensorboard chart - slice/mel_gen
-        y_hat_mel = wave_to_mel(y_hat, half=train_dtype)
+        y_hat_mel = wave_to_mel(config, y_hat, half=train_dtype)
 
         # Mel similarity metric:
         mel_similarity = mel_spec_similarity(y_hat_mel, y_mel)
@@ -1445,14 +1208,14 @@ def training_loop(
 
 
         # At each epoch save point:
-        if epoch % save_every_epoch == 0:
+        if epoch % epoch_save_frequency == 0:
             if not benchmark_mode and use_validation:
                 # Running validation
                 validation_loop(
                     net_g.module if hasattr(net_g, "module") else net_g,
                     val_loader,
                     device,
-                    hps,
+                    config,
                     writer,
                     global_step,
                 )
@@ -1497,8 +1260,8 @@ def training_loop(
         print(record)
 
         # Save weights every N epochs
-        if epoch % save_every_epoch == 0:
-            checkpoint_suffix = f"{2333333 if save_only_latest else global_step}.pth"
+        if epoch % epoch_save_frequency == 0:
+            checkpoint_suffix = f"{2333333 if save_only_latest_net_models else global_step}.pth"
             # Save Generator checkpoint
             save_checkpoint(
                 architecture,
@@ -1518,17 +1281,17 @@ def training_loop(
                 os.path.join(experiment_dir, "D_" + checkpoint_suffix),
             )
             # Save small weight model
-            if custom_save_every_weights:
-                weight_model_name = small_model_naming(model_name, epoch, global_step, lora_rank)
+            if save_weight_models:
+                weight_model_name = small_model_naming(model_name, epoch, global_step)
                 model_add.append(os.path.join(experiment_dir, weight_model_name))
 
         # Check completion
-        if epoch >= custom_total_epoch:
+        if epoch >= total_epoch_count:
             print(
                 f"Training has been successfully completed with {epoch} epoch, {global_step} steps and {round(loss_gen_total.item(), 3)} loss gen."
             )
             # Final model
-            weight_model_name = small_model_naming(model_name, epoch, global_step, lora_rank)
+            weight_model_name = small_model_naming(model_name, epoch, global_step)
             model_add.append(os.path.join(experiment_dir, weight_model_name))
 
             done = True
@@ -1548,11 +1311,9 @@ def training_loop(
                         model_path=m,
                         epoch=epoch,
                         step=global_step,
-                        hps=hps,
+                        hps=config,
                         vocoder=vocoder,
                         architecture=architecture,
-                        use_lora=use_lora,
-                        lora_rank=lora_rank,
                     )
         if done:
             # Clean-up process IDs from memory
@@ -1568,7 +1329,7 @@ def training_loop(
             torch.cuda.empty_cache()
 
 
-def validation_loop(net_g, val_loader, device, hps, writer, global_step):
+def validation_loop(net_g, val_loader, device, config, writer, global_step):
     net_g.eval()
     torch.cuda.empty_cache()
 
@@ -1580,10 +1341,10 @@ def validation_loop(net_g, val_loader, device, hps, writer, global_step):
     count = 0
 
     mrstft = auraloss.freq.MultiResolutionSTFTLoss(device=device)
-    resample_to_16k = torchaudio.transforms.Resample(orig_freq=hps.data.sample_rate, new_freq=16000).to(device)
+    resample_to_16k = torchaudio.transforms.Resample(orig_freq=config.data.sample_rate, new_freq=16000).to(device)
 
-    hop_length = hps.data.hop_length
-    sample_rate = hps.data.sample_rate
+    hop_length = config.data.hop_length
+    sample_rate = config.data.sample_rate
 
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validating"):
@@ -1596,8 +1357,8 @@ def validation_loop(net_g, val_loader, device, hps, writer, global_step):
             y_len = y.shape[-1]
 
         # Obtaining mel specs
-            y_hat_mel = wave_to_mel(y_hat, half=train_dtype) # generator-source mel
-            mel = wave_to_mel(y, half=train_dtype) # gt-source mel
+            y_hat_mel = wave_to_mel(config, y_hat, half=train_dtype) # generator-source mel
+            mel = wave_to_mel(config, y, half=train_dtype) # gt-source mel
 
         # Mel loss:
             y_hat_mel_len = y_hat_mel.shape[-1]

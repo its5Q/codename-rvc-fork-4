@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 import requests
 
-url_base = "https://huggingface.co/IAHispano/Applio/resolve/main/Resources"
+url_base = "https://huggingface.co/IAHispano/Applio/resolve/main/Resources" # Might change in future
 
 pretraineds_hifigan_list = [
     (
@@ -20,11 +20,12 @@ pretraineds_hifigan_list = [
 ]                                 
 models_list = [
     ("predictors/", ["rmvpe.pt"]),
-    ("predictors/", ["fcpe.pt"], "https://huggingface.co/Codename0/codename-rvc-fork-3-assets/resolve/main/models/predictors/fcpe")
+    #("predictors/", ["placeholder.pt"], "https://huggingface.co/Codename0/codename-rvc-fork-3-assets/resolve/main/models/predictors/placeholder")
 ]
 embedders_list = [
     ("embedders/contentvec/", ["pytorch_model.bin", "config.json"]),
-    ("embedders/spin/", ["pytorch_model.bin", "config.json"], "https://huggingface.co/IAHispano/Applio/resolve/main/Resources/embedders/spin")
+    ("embedders/spin_v1", ["pytorch_model.bin", "config.json"], "https://huggingface.co/IAHispano/Applio/resolve/main/Resources/embedders/spin"),
+    ("embedders/spin_v2", ["pytorch_model.bin", "config.json"], "https://huggingface.co/dr87/spinv2_rvc/resolve/main"),
 ]
 executables_list = [
     ("", ["ffmpeg.exe", "ffprobe.exe"]),
@@ -33,7 +34,8 @@ executables_list = [
 folder_mapping_list = {
     "pretrained_v2/": "rvc/models/pretraineds/hifi-gan/",
     "embedders/contentvec/": "rvc/models/embedders/contentvec/",
-    "embedders/spin/": "rvc/models/embedders/spin/",
+    "embedders/spin_v1": "rvc/models/embedders/spin_v1/",
+    "embedders/spin_v2": "rvc/models/embedders/spin_v2/",
     "predictors/": "rvc/models/predictors/",
     "formant/": "rvc/models/formant/",
 }

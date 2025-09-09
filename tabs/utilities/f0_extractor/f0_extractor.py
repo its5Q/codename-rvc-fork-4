@@ -40,7 +40,7 @@ def f0_extractor_tab():
     f0_method = gr.Radio(
         label="Pitch extraction algorithm",
         info="Pitch / f0 estimation algorithm used in extraction.",
-        choices=["crepe", "fcpe", "rmvpe"],
+        choices=["crepe", "rmvpe"],
         value="rmvpe",
     )
     button = gr.Button("Extract F0 Curve")

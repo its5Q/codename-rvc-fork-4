@@ -5,7 +5,6 @@ import numpy as np
 import resampy
 import torch
 import torchcrepe
-import torchfcpe
 import os
 
 # from tools.anyf0.rmvpe import RMVPE
@@ -51,30 +50,6 @@ class F0Extractor:
                 device=config.device,
             )
             f0 = f0[0].cpu().numpy()
-        elif method == "fcpe":
-            audio = librosa.to_mono(self.x)
-            audio_length = len(audio)
-            f0_target_length = (audio_length // self.hop_length) + 1
-            audio = (
-                torch.from_numpy(audio)
-                .float()
-                .unsqueeze(0)
-                .unsqueeze(-1)
-                .to(config.device)
-            )
-            model = torchfcpe.spawn_bundled_infer_model(device=config.device)
-
-            f0 = model.infer(
-                audio,
-                sr=self.sample_rate,
-                decoder_mode="local_argmax",
-                threshold=0.006,
-                f0_min=self.f0_min,
-                f0_max=self.f0_max,
-                interp_uv=False,
-                output_interp_target_length=f0_target_length,
-            )
-            f0 = f0.squeeze().cpu().numpy()
         elif method == "rmvpe":
             model_rmvpe = RMVPE0Predictor(
                 os.path.join("rvc", "models", "predictors", "rmvpe.pt"),

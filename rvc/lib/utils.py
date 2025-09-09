@@ -222,7 +222,8 @@ def load_embedding(embedder_model, custom_embedder=None):
     embedder_root = os.path.join(now_dir, "rvc", "models", "embedders")
     embedding_list = {
         "contentvec": os.path.join(embedder_root, "contentvec"),
-        "spin": os.path.join(embedder_root, "spin"),
+        "spin_v1": os.path.join(embedder_root, "spin_v1"),
+        "spin_v2": os.path.join(embedder_root, "spin_v2"),
         "chinese-hubert-base": os.path.join(embedder_root, "chinese_hubert_base"),
         "japanese-hubert-base": os.path.join(embedder_root, "japanese_hubert_base"),
         "korean-hubert-base": os.path.join(embedder_root, "korean_hubert_base"),
@@ -248,7 +249,11 @@ def load_embedding(embedder_model, custom_embedder=None):
         else:
             print(f"Custom embedder not found: {custom_embedder}, using contentvec")
             model_path = embedding_list["contentvec"]
-    elif embedder_model == "spin":
+    elif embedder_model == "spin_v1":
+        model_path = embedding_list[embedder_model]
+        bin_file = os.path.join(model_path, "pytorch_model.bin")
+        json_file = os.path.join(model_path, "config.json")
+    elif embedder_model == "spin_v2":
         model_path = embedding_list[embedder_model]
         bin_file = os.path.join(model_path, "pytorch_model.bin")
         json_file = os.path.join(model_path, "config.json")

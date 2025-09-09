@@ -36,8 +36,6 @@ def extract_model(
     architecture,
     pitch_guidance=True,
     version="v2",
-    use_lora=False,
-    lora_rank=None,
 ):
     try:
         model_dir = os.path.dirname(model_path)
@@ -106,9 +104,6 @@ def extract_model(
                 hps.model.gen_istft_n_fft,
                 hps.model.gen_istft_hop_size,
             ]
-
-        if use_lora and lora_rank is not None:
-            opt["lora_rank"] = lora_rank
 
         # Backwards compatibility for mainline for "RVC" architecture
         if architecture == "RVC":
