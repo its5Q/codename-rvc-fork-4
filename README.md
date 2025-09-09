@@ -79,7 +79,7 @@
  
 - New logging mechanism for losses: Average loss per epoch logged as the standard loss, <br/>and rolling average loss over 50 steps to evaluate general trends and the model's performance over time.
  
-- From-ui quick tweaks; lr for g/d, schedulers, linear warmup etc.
+- From-ui quick tweaks; lr for g/d, schedulers, linear warmup, kl loss annealing and more ..
  
  
  <br/>
