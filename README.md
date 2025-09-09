@@ -62,7 +62,7 @@
  
 - Support for 'Spin' embedder.
  
-- Ability to choose an optimizer.  ` ( Currently supporting: AdamW, AdamW_BF16, RAdam, Ranger21, DiffGrad, Prodigy ) `
+- Ability to choose an optimizer.  ` ( Supported: AdamW, AdamW_BF16, RAdam, Ranger21, DiffGrad, Prodigy ) `
  
 - (EXP) Double-update strategy for Discriminator.
  
