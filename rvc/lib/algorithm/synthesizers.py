@@ -2,14 +2,6 @@ import torch
 from typing import Optional
 import random
 
-# Generators
-from rvc.lib.algorithm.generators.hifigan_mrf import HiFiGANMRFGenerator
-from rvc.lib.algorithm.generators.hifigan_nsf import HiFiGANNSFGenerator
-from rvc.lib.algorithm.generators.hifigan import HiFiGANGenerator
-from rvc.lib.algorithm.generators.refinegan import RefineGANGenerator
-from rvc.lib.algorithm.generators.ringformer import RingFormerGenerator #
-#from rvc.lib.algorithm.generators.ringformer_nof0 import RingFormerGenerator_nof0 #
-
 from rvc.lib.algorithm.commons import slice_segments, rand_slice_segments
 from rvc.lib.algorithm.residuals import ResidualCouplingBlock
 from rvc.lib.algorithm.encoders import TextEncoder, PosteriorEncoder
@@ -52,7 +44,7 @@ class Synthesizer(torch.nn.Module):
         self.segment_size = segment_size
         self.use_f0 = use_f0
         self.randomized = randomized
-        self.is_ringformer = vocoder == "RingFormer"
+        self.vocoder = vocoder
 
         self.enc_p = TextEncoder(
             inter_channels,
@@ -67,6 +59,7 @@ class Synthesizer(torch.nn.Module):
         )
         if use_f0:
             if vocoder == "MRF HiFi-GAN":
+                from rvc.lib.algorithm.generators import HiFiGANMRFGenerator
                 self.dec = HiFiGANMRFGenerator(
                     in_channel=inter_channels,
                     upsample_initial_channel=upsample_initial_channel,
@@ -81,6 +74,7 @@ class Synthesizer(torch.nn.Module):
                 )
                 print("    ██████  Vocoder: NSF-HiFi-GAN ( MRF VARIANT )")
             elif vocoder == "RefineGAN":
+                from rvc.lib.algorithm.generators import RefineGANGenerator
                 self.dec = RefineGANGenerator(
                     sample_rate=sr,
                     downsample_rates=upsample_rates[::-1],
@@ -91,6 +85,7 @@ class Synthesizer(torch.nn.Module):
                 )
                 print("    ██████  Vocoder: RefineGAN")
             elif vocoder == "RingFormer":
+                from rvc.lib.algorithm.generators import RingFormerGenerator
                 self.dec = RingFormerGenerator(
                     initial_channel=inter_channels,
                     resblock_kernel_sizes=resblock_kernel_sizes,
@@ -106,6 +101,7 @@ class Synthesizer(torch.nn.Module):
                 )
                 print("    ██████  Vocoder: RingFormer")
             else:
+                from rvc.lib.algorithm.generators import HiFiGANNSFGenerator
                 self.dec = HiFiGANNSFGenerator(
                     inter_channels,
                     resblock_kernel_sizes,
@@ -129,6 +125,7 @@ class Synthesizer(torch.nn.Module):
                 print("RingFormer does not support training without pitch guidance.")
                 self.dec = None
             else:
+                from rvc.lib.algorithm.generators import HiFiGANGenerator
                 self.dec = HiFiGANGenerator(
                     inter_channels,
                     resblock_kernel_sizes,
@@ -210,29 +207,29 @@ class Synthesizer(torch.nn.Module):
 
             z_p = self.flow(z, spec_mask, g=g)
 
-
-            if not self.is_ringformer: # For HiFi-Gan, MRF-HiFi-Gan and RefineGan training
-            
+            if self.vocoder == "RingFormer":
                 if self.randomized:
                     z_slice, ids_slice = rand_slice_segments(z, spec_lengths, self.segment_size)
-                    if debug_shapes:
-                        print(f"[DEBUG PRE-DECODER] z_slice shape: {z_slice.shape}")
-                        print(f"[DEBUG PRE-DECODER] ids_slice: {ids_slice}")
+                    pitchf = slice_segments(pitchf, ids_slice, self.segment_size, 2)
+                    o, spec, phase = self.dec(z_slice, pitchf, g=g) # f0 output
+
+                    return o, ids_slice, x_mask, spec_mask, (z, z_p, m_p, logs_p, m_q, logs_q), (spec, phase)
+                else:
+                    o, spec, phase = self.dec(z, pitchf, g=g) # f0 output
+
+                    return o, None, x_mask, spec_mask, (z, z_p, m_p, logs_p, m_q, logs_q), (spec, phase)
+
+            else: # For HiFi-Gan, MRF-HiFi-Gan and RefineGan training
+                if self.randomized:
+                    z_slice, ids_slice = rand_slice_segments(z, spec_lengths, self.segment_size)
 
                     if self.use_f0:
-                        if debug_shapes:
-                            print(f"[DEBUG] pitchf shape before slicing: {pitchf.shape}")
-
                         pitchf = slice_segments(pitchf, ids_slice, self.segment_size, 2)
-                        if debug_shapes:
-                            print(f"[DEBUG PRE-DECODER] pitchf shape after slicing: {pitchf.shape}")
-
                         o = self.dec(z_slice, pitchf, g=g)
                     else:
                         o = self.dec(z_slice, g=g)
 
                     return o, ids_slice, x_mask, spec_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
-
                 else:
                     if self.use_f0:
                         o = self.dec(z, pitchf, g=g)
@@ -240,30 +237,6 @@ class Synthesizer(torch.nn.Module):
                         o = self.dec(z, g=g)
 
                     return o, None, x_mask, spec_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
-
-            else: # For RingFormer training
-
-                if self.randomized: # If using the slicing mechanism
-                    z_slice, ids_slice = rand_slice_segments(z, spec_lengths, self.segment_size)
-                    if debug_shapes:
-                        print(f"[DEBUG PRE-DECODER] z_slice shape: {z_slice.shape}")
-                        print(f"[DEBUG PRE-DECODER] ids_slice: {ids_slice}")
-
-                        print(f"[DEBUG] pitchf shape before slicing: {pitchf.shape}")
-
-                    pitchf = slice_segments(pitchf, ids_slice, self.segment_size, 2)
-                    if debug_shapes:
-                        print(f"[DEBUG PRE-DECODER] pitchf shape after slicing: {pitchf.shape}")
-
-                    o, spec, phase = self.dec(z_slice, pitchf, g=g) # f0 output
-
-                    return o, ids_slice, x_mask, spec_mask, (z, z_p, m_p, logs_p, m_q, logs_q), (spec, phase)
-
-                else:
-                    o, spec, phase = self.dec(z, pitchf, g=g) # f0 output
-                    #o, spec, phase = self.dec(z, g=g) # f0 output
-
-                    return o, None, x_mask, spec_mask, (z, z_p, m_p, logs_p, m_q, logs_q), (spec, phase)
         else:
             print(" NONE SPEC ")
             return None, None, x_mask, None, (None, None, m_p, logs_p, None, None)
@@ -317,10 +290,10 @@ class Synthesizer(torch.nn.Module):
 
         z = self.flow(z_p, x_mask, g=g, reverse=True)
 
-        if not self.is_ringformer:  # Non RingFormer
-            o = (self.dec(z * x_mask, nsff0, g=g) if self.use_f0 else self.dec(z * x_mask, g=g))
-        else:
+        if self.vocoder == "RingFormer":
             o, _, _ = self.dec(z * x_mask, nsff0, g=g)
+        else:
+            o = (self.dec(z * x_mask, nsff0, g=g) if self.use_f0 else self.dec(z * x_mask, g=g))
 
         return o, x_mask, (z, z_p, m_p, logs_p)
 

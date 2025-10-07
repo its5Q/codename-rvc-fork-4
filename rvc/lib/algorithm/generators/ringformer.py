@@ -107,7 +107,7 @@ class SineGenerator(torch.nn.Module):
             # then: additive noise
             sine_waves = sine_waves * voiced_mask + noise
 
-            return sine_waves
+        return sine_waves
 
 class SourceModuleHnNSF(torch.nn.Module):
     def __init__(

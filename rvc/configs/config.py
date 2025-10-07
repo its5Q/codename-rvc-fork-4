@@ -1,6 +1,6 @@
 import torch
-import json
 import os
+import json
 
 arch_config_paths = {
     "hifi_mrf_refine": [
@@ -31,12 +31,12 @@ class Config:
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
         initial_precision = self.get_precision()
-        
+
         if self.device == "cpu":
             self.is_half = False
             print("[CONFIG] Running on CPU, forcing fp32 precision.")
         else:
-            self.is_half = initial_precision == "bf16"  or initial_precision == "fp16"
+            self.is_half = initial_precision == "fp16"  or initial_precision == "bf16"
             print(f"[CONFIG] Running on CUDA, training-only precision loaded from config: {initial_precision}")
         self.gpu_name = (
             torch.cuda.get_device_name(int(self.device.split(":")[-1]))
@@ -58,21 +58,21 @@ class Config:
 
 
     def set_precision(self, precision):
-        if precision not in ["fp32", "bf16", "fp16"]:
-            raise ValueError("Invalid precision type. Must be 'fp32', 'bf16' or 'fp16'.")
+        if precision not in ["fp32", "fp16", "bf16"]:
+            raise ValueError("Invalid precision type. Must be 'fp32', 'fp16' or 'bf16'.")
 
-        bf16_run_value = precision == "bf16"
         fp16_run_value = precision == "fp16"
+        bf16_run_value = precision == "bf16"
 
-        self.is_half = bf16_run_value or fp16_run_value
+        self.is_half =  fp16_run_value or bf16_run_value
 
         for config_path in arch_config_paths["hifi_mrf_refine"]:
             full_config_path = os.path.join("rvc", "configs", config_path)
             try:
                 with open(full_config_path, "r") as f:
                     config = json.load(f)
-                config["train"]["bf16_run"] = bf16_run_value
                 config["train"]["fp16_run"] = fp16_run_value
+                config["train"]["bf16_run"] = bf16_run_value
                 with open(full_config_path, "w") as f:
                     json.dump(config, f, indent=4)
             except FileNotFoundError:
@@ -83,8 +83,8 @@ class Config:
             try:
                 with open(full_config_path, "r") as f:
                     config = json.load(f)
-                config["train"]["bf16_run"] = bf16_run_value
                 config["train"]["fp16_run"] = fp16_run_value
+                config["train"]["bf16_run"] = bf16_run_value
                 with open(full_config_path, "w") as f:
                     json.dump(config, f, indent=4)
             except FileNotFoundError:
@@ -101,14 +101,14 @@ class Config:
         try:
             with open(full_config_path, "r") as f:
                 config = json.load(f)
-            
-            bf16_run_value = config["train"].get("bf16_run", False)
+
             fp16_run_value = config["train"].get("fp16_run", False)
-            
-            if bf16_run_value:
-                precision = "bf16"
-            elif fp16_run_value:
+            bf16_run_value = config["train"].get("bf16_run", False)
+
+            if fp16_run_value:
                 precision = "fp16"
+            elif bf16_run_value:
+                precision = "bf16"
             else:
                 precision = "fp32"
             return precision
@@ -126,21 +126,21 @@ class Config:
             with open(full_config_path, "r") as f:
                 config = json.load(f)
 
-            bf16_run_value = config["train"].get("bf16_run", False)
             fp16_run_value = config["train"].get("fp16_run", False)
-            
-            if bf16_run_value:
-                precision = "bf16"
-            elif fp16_run_value:
+            bf16_run_value = config["train"].get("bf16_run", False)
+
+            if fp16_run_value:
                 precision = "fp16"
+            elif bf16_run_value:
+                precision = "bf16"
             else:
                 precision = "fp32"
-            
+
             runtime_precision = "fp32"
-            if self.is_half and bf16_run_value:
-                runtime_precision = "bf16"
-            elif self.is_half and fp16_run_value:
+            if self.is_half and fp16_run_value:
                 runtime_precision = "fp16"
+            elif self.is_half and bf16_run_value:
+                runtime_precision = "bf16"
 
             result = (
                 f"Config File Precision: {precision}\n"
@@ -175,21 +175,12 @@ class Config:
         i_device = int(self.device.split(":")[-1])
         self.gpu_name = torch.cuda.get_device_name(i_device)
 
-        # Special cases:
-            # GPUs supporting FP16
-        fp16_gpus = ["V100", "2050", "2060", "2070", "2080", "TITAN RTX"]
-        
-            # GPUs that must be forced to fp32 ( cause either " don't support " fp16 or it's performance is tragic and outweights the pros.
+        # GPUs that must be forced to fp32 ( They either don't support fp16 or the performance is tragic and outweights the pros.
         fp32_gpus = ["16", "P40", "P10", "1050", "1060", "1070", "1080"]
 
-        if any(gpu_str.lower() in self.gpu_name.lower() for gpu_str in fp16_gpus):
-            print(f"[CONFIG WARNING] Your GPU ({self.gpu_name}) does NOT support bf16 precision. Forcing precision to fp16.")
-            print(f"[CONFIG WARNING] Your GPU ({self.gpu_name}) does NOT support RingFormer architecture.")
-            print("[CONFIG] Forcing precision to fp16.")
-            self.set_precision("fp16")
-        elif any(gpu_str.lower() in self.gpu_name.lower() for gpu_str in fp32_gpus):
+        if any(gpu_str.lower() in self.gpu_name.lower() for gpu_str in fp32_gpus):
             if self.is_half:
-                print(f"[CONFIG WARNING] Your GPU ({self.gpu_name}) does NOT support bf16 or fp16 precision.")
+                print(f"[CONFIG WARNING] Your GPU ({self.gpu_name}) does NOT support fp16 and bf16 precision.")
                 print(f"[CONFIG WARNING] Your GPU ({self.gpu_name}) does NOT support RingFormer architecture.")
                 print("[CONFIG] Forcing precision to fp32.")
             self.is_half = False
@@ -230,28 +221,10 @@ def get_number_of_gpus():
     else:
         return "-"
 
+
 def microarchitecture_capability_checker():
     return torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
 
-
-
-
-import os
-import json
-
-arch_config_paths = {
-    "hifi_mrf_refine": [
-        os.path.join("hifi_mrf_refine", "48000.json"),
-        os.path.join("hifi_mrf_refine", "40000.json"),
-        os.path.join("hifi_mrf_refine", "32000.json"),
-    ],
-    "ringformer": [
-        os.path.join("ringformer", "48000.json"),
-        os.path.join("ringformer", "40000.json"),
-        os.path.join("ringformer", "32000.json"),
-        os.path.join("ringformer", "24000.json"),
-    ],
-}
 
 def check_if_fp16():
     for arch_name, config_files in arch_config_paths.items():

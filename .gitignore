@@ -14,6 +14,7 @@
 !rvc/models/pretraineds/custom/.gitkeep
 # Files to be ignored  ==========================
 env/
+utmos/
 rollback_cache/
 ffprobe.exe
 ffmpeg.exe
@@ -33,21 +34,14 @@ rvc/models/embedders/contentvec/config.json
 
 rvc/infer/pipeline - debug_ver.py
 rvc/lib/utils - debug.py
+rvc/lib/algorithm/generators/Vocoder_Experiments
 rvc/train/preprocess/preprocess - backup.py
 rvc/train/preprocess/preprocess_old - backup.py
 debug/
 DEV/
 *.pyc
-rvc/train/train - SEPARATED.py
-rvc/lib/algorithm/generators/ringformer - newest - no modulo - best clean revision (2).py
-rvc/lib/algorithm/generators/ringformer - newest - modulo_mk2 - best revision (1).py
-rvc/lib/algorithm/generators/ringformer - Copy NEWST PRE CHECKPOINT.py
 rvc/train/utils - Copy.py
-rvc/train/train - Copy.py
-rvc/train/train - Copy (2) - remap active.py
 EXTRAS/transfer.py
 rvc/configs/config - backup.py
 rvc/train/preprocess/preprocess - LUFS WITHOUT SAFETY.py
-rvc/train/train - Failed Lora.py
-rvc/train/train - Copy ( refactored - contained in run ).py
-rvc/train/train - Copy ( Classic - outdated ).py
+EXTRAS/uvmp_extractor.py

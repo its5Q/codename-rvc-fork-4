@@ -19,8 +19,12 @@ from time import time as ttime, sleep
 
 import numpy as np
 import psutil
+import matplotlib.pyplot as plt #
+import loss_landscapes #
 from tqdm import tqdm
 from pesq import pesq
+from mpl_toolkits.mplot3d import Axes3D #
+from loss_landscapes.metrics import Loss #
 
 import torch
 import torch.nn as nn
@@ -104,15 +108,13 @@ spectral_loss = sys.argv[22]
 lr_scheduler = sys.argv[23]
 exp_decay_gamma = float(sys.argv[24])
 use_validation = strtobool(sys.argv[25])
-double_d_update = strtobool(sys.argv[26])
-use_kl_annealing = strtobool(sys.argv[27])
-kl_annealing_cycle_duration = int(sys.argv[28])
-use_custom_lr = strtobool(sys.argv[29])
-custom_lr_g, custom_lr_d = (float(sys.argv[30]), float(sys.argv[31])) if use_custom_lr else (None, None)
+use_kl_annealing = strtobool(sys.argv[26])
+kl_annealing_cycle_duration = int(sys.argv[27])
+use_custom_lr = strtobool(sys.argv[28])
+custom_lr_g, custom_lr_d = (float(sys.argv[29]), float(sys.argv[30])) if use_custom_lr else (None, None)
 assert not use_custom_lr or (custom_lr_g and custom_lr_d), "Invalid custom LR values."
 
 # Parse command line arguments end region ===========================
-
 
 current_dir = os.getcwd()
 experiment_dir = os.path.join(current_dir, "logs", model_name)
@@ -137,7 +139,6 @@ else:
 
 # Globals ( do not touch these. )
 global_step = 0
-d_updates_per_step = 2 if double_d_update else 1
 warmup_completed = False
 from_scratch = False
 use_lr_scheduler = lr_scheduler != "none"
@@ -158,14 +159,11 @@ debug_shapes = False
 
 
 # EXPERIMENTAL
-c_stft = 21.0 # 18.0
-
-
+c_stft = 21.0 # Seems close enough to multi-scale mel loss's magnitude, but needs more testing.
 ##################################################################
 
 import logging
 logging.getLogger("torch").setLevel(logging.ERROR)
-
 
 class EpochRecorder:
     """
@@ -311,7 +309,7 @@ def get_optimizers(
     total_epoch_count,
     train_loader
 ):
-    # Base / Common kwargs for gen and disc
+    # Common args for optims
     common_args_g = dict(
         lr=custom_lr_g if use_custom_lr else config.train.learning_rate,
         betas=(0.8, 0.99),
@@ -324,72 +322,54 @@ def get_optimizers(
         eps=1e-9,
         weight_decay=0,
     )
-    common_args_g_bf16 = dict(
-        lr=custom_lr_g if use_custom_lr else config.train.learning_rate,
-        betas=(0.8, 0.99),
-        eps=1e-9,
-        weight_decay=0.0,
-        use_kahan_summation=True,
+    # For exotic optimizers
+    ranger_args = dict(
+        num_epochs=total_epoch_count,
+        num_batches_per_epoch=len(train_loader),
+        use_madgrad=False,
+        use_warmup=False,
+        warmdown_active=False,
+        use_cheb=False,
+        lookahead_active=True,
+        normloss_active=False,
+        normloss_factor=1e-4,
+        softplus=False,
+        use_adaptive_gradient_clipping=True,
+        agc_clipping_value=0.01,
+        agc_eps=1e-3,
+        using_gc=True,
+        gc_conv_only=True,
+        using_normgc=False,
     )
-    common_args_d_bf16 = dict(
-        lr=custom_lr_d if use_custom_lr else config.train.learning_rate,
-        betas=(0.8, 0.99),
-        eps=1e-9,
-        weight_decay=0.0,
-        use_kahan_summation=True,
-    )
-    if optimizer_choice == "Ranger21":
-        from rvc.train.custom_optimizers.ranger21 import Ranger21
-        ranger_args = dict(
-            num_epochs=total_epoch_count,
-            num_batches_per_epoch=len(train_loader),
-            use_madgrad=False,
-            use_warmup=False,
-            warmdown_active=False,
-            use_cheb=False,
-            lookahead_active=True,
-            normloss_active=False,
-            normloss_factor=1e-4,
-            softplus=False,
-            use_adaptive_gradient_clipping=True,
-            agc_clipping_value=0.01,
-            agc_eps=1e-3,
-            using_gc=True,
-            gc_conv_only=True,
-            using_normgc=False,
-        )
-        optim_g = Ranger21(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g, **ranger_args)
-        optim_d = Ranger21(net_d.parameters(), **common_args_d, **ranger_args)
+
+    if optimizer_choice == "AdamW":
+        optim_g = torch.optim.AdamW(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g, fused=True)
+        optim_d = torch.optim.AdamW(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d, fused=True)
+
+    elif optimizer_choice == "AdamW BF16":
+        from optimi import AdamW as AdamW_BF16
+        optim_g = AdamW_BF16(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g, kahan_sum=True, foreach=True)
+        optim_d = AdamW_BF16(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d, kahan_sum=True, foreach=True)
 
     elif optimizer_choice == "RAdam":
         import torch_optimizer
         optim_g = torch_optimizer.RAdam(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g)
-        optim_d = torch_optimizer.RAdam(net_d.parameters(), **common_args_d)
-
-    elif optimizer_choice == "AdamW":
-        optim_g = torch.optim.AdamW(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g)
-        optim_d = torch.optim.AdamW(net_d.parameters(), **common_args_d)
-
-    elif optimizer_choice == "AdamW_BF16":
-        from rvc.train.custom_optimizers.adamw_bfloat import BFF_AdamW
-        optim_g = BFF_AdamW(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g_bf16)
-        optim_d = BFF_AdamW(net_d.parameters(), **common_args_d_bf16)
-
-    elif optimizer_choice == "Prodigy":
-        from rvc.train.custom_optimizers.prodigy import Prodigy
-        prodigy_args = dict(
-            betas=(0.8, 0.99),
-            weight_decay=0.0,
-            decouple=True,
-        )
-        optim_g = Prodigy(filter(lambda p: p.requires_grad, net_g.parameters()), lr=custom_lr_g if use_custom_lr else 1.0, **prodigy_args)
-        optim_d = Prodigy(net_d.parameters(), lr=custom_lr_d if use_custom_lr else 1.0, **prodigy_args)
+        optim_d = torch_optimizer.RAdam(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d)
 
     elif optimizer_choice == "DiffGrad":
         from rvc.train.custom_optimizers.diffgrad import diffgrad
         optim_g = diffgrad(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g)
-        optim_d = diffgrad(net_d.parameters(), **common_args_d)
+        optim_d = diffgrad(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d)
 
+    elif optimizer_choice == "Prodigy":
+        from rvc.train.custom_optimizers.prodigy import Prodigy
+        optim_g = Prodigy(filter(lambda p: p.requires_grad, net_g.parameters()), lr=custom_lr_g if use_custom_lr else 1.0, betas=(0.8, 0.99), weight_decay=0.0, decouple=True)
+        optim_d = Prodigy(filter(lambda p: p.requires_grad, net_d.parameters()), lr=custom_lr_d if use_custom_lr else 1.0, betas=(0.8, 0.99), weight_decay=0.0, decouple=True)
+
+    elif optimizer_choice == "Ranger21":
+        from rvc.train.custom_optimizers.ranger21 import Ranger21
+        optim_g = Ranger21(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g, **ranger_args)
+        optim_d = Ranger21(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d, **ranger_args)
     else:
         raise ValueError(f"Unknown optimizer choice: {optimizer_choice}")
     return optim_g, optim_d
@@ -404,6 +384,9 @@ def setup_models_for_training(net_g, net_d, device, device_id, n_gpus):
     return net_g, net_d
 
 def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkpointing, randomized, sample_rate, optimizer_choice, custom_lr_g, custom_lr_d, use_custom_lr, total_epoch_count, train_loader, device, device_id, n_gpus, rank):
+    # Init the models
+    net_g = get_g_model(config, sample_rate, vocoder, use_checkpointing, randomized)
+    net_d = get_d_model(config, vocoder, use_checkpointing)
     try:
         print("    ██████  Starting the training ...")
 
@@ -414,14 +397,8 @@ def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkp
         # If they exist, we attempt to resume the training
         if g_checkpoint_path and d_checkpoint_path:
 
-            # Init the models
-            net_g = get_g_model(config, sample_rate, vocoder, use_checkpointing, randomized)
-            net_d = get_d_model(config, vocoder, use_checkpointing)
-
-
             # Init the optimizers
             optim_g, optim_d = get_optimizers(net_g, net_d, config, optimizer_choice, custom_lr_g, custom_lr_d, use_custom_lr, total_epoch_count, train_loader)
-
             # Move the models to an appropriate device ( And optionally wrap with DDP for multi-gpu )
             net_g, net_d = setup_models_for_training(net_g, net_d, device, device_id, n_gpus)
 
@@ -440,16 +417,11 @@ def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkp
         epoch_str = 1
         global_step = 0
 
-        # Init the models
-        net_g = get_g_model(config, sample_rate, vocoder, use_checkpointing, randomized)
-        net_d = get_d_model(config, vocoder, use_checkpointing)
-
         # Loading the pretrained Generator model
         if (pretrainG != "" and pretrainG != "None"):
             if rank == 0:
                 print(f"Loading pretrained (G) '{pretrainG}'")
             verify_remap_checkpoint(pretrainG, net_g, architecture)
-
 
         # Loading the pretrained Discriminator model
         if pretrainD != "" and pretrainD != "None":
@@ -459,8 +431,10 @@ def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkp
 
         # Load the models and optionally wrap with DDP
         net_g, net_d = setup_models_for_training(net_g, net_d, device, device_id, n_gpus)
+
         # Init the optimizers
         optim_g, optim_d = get_optimizers(net_g, net_d, config, optimizer_choice, custom_lr_g, custom_lr_d, use_custom_lr, total_epoch_count, train_loader)
+
     return net_g, net_d, optim_g, optim_d, epoch_str, global_step
 
 def prepare_schedulers(optim_g, optim_d, use_warmup, warmup_duration, use_lr_scheduler, lr_scheduler, exp_decay_gamma, total_epoch_count, epoch_str):
@@ -642,7 +616,6 @@ def run(
         use_warmup,
         config,
         optimizer_choice,
-        d_updates_per_step,
         use_validation,
         lr_scheduler,
         exp_decay_gamma,
@@ -682,22 +655,14 @@ def run(
         print("    ██████  Spectral loss: Multi-Scale Mel loss function")
     elif spectral_loss == "Multi-Res STFT Loss":
         fn_spectral_loss = auraloss.freq.MultiResolutionSTFTLoss(
-            fft_sizes = [1024, 2048, 512],
-            hop_sizes = [80, 160, 40],      # stock: 120, 240, 50
-            win_lengths = [480, 960, 240],  # stock: 600, 1200, 240
+            fft_sizes = [1024, 2048, 4096],
+            hop_sizes = [256, 512, 1024],
+            win_lengths = [1024, 2048, 4096],
             window = "hann_window",
-            w_sc = 1.0,
-            w_log_mag = 1.0,
-            w_lin_mag = 0.0,
-            w_phs=0.0,
+            scale = "mel",
+            n_bins = 128,
             sample_rate = sample_rate,
-            scale = None,
-            n_bins = None,
             perceptual_weighting = True,
-            scale_invariance = False,
-            output= "loss",      # "loss", "full"
-            reduction = "mean",  # "none", "mean", "sum"
-            mag_distance = "L1", # "L1", "L2"
             device=device,
         )
         print("    ██████  Spectral loss: Multi-Resolution STFT loss function")
@@ -780,6 +745,7 @@ def run(
             gradscaler,
             hann_window,
         )
+
         if use_warmup and epoch <= warmup_duration:
             if warmup_scheduler_g:
                 warmup_scheduler_g.step()
@@ -848,7 +814,7 @@ def training_loop(
         gradscaler: gradscaler for fp16
         hann_window: hann window used for RingFormer
     """
-    global global_step, warmup_completed, dynamic_c_kl
+    global global_step, warmup_completed
 
     net_g, net_d = nets
     optim_g, optim_d = optims
@@ -931,6 +897,7 @@ def training_loop(
             # Generator forward pass:
             with autocast(device_type="cuda", enabled=use_amp, dtype=train_dtype):
                 model_output = net_g(phone, phone_lengths, pitch, pitchf, spec, spec_lengths, sid)
+                print(f"vocoder used: {vocoder}")
                 # Unpacking:
                 if vocoder == "RingFormer":
                     y_hat, ids_slice, x_mask, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q), (mag, phase) = (model_output)
@@ -954,34 +921,26 @@ def training_loop(
                 target_magnitude = torch.abs(y_stft)  # shape: [B, F, T]
 
             # Discriminator forward pass:
-            for _ in range(d_updates_per_step):  # default is 1 update per step
-                with autocast(device_type="cuda", enabled=use_amp, dtype=train_dtype):
-                    y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
+            with autocast(device_type="cuda", enabled=use_amp, dtype=train_dtype):
+                y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
 
-                with autocast(device_type="cuda", enabled=False):
-                    # Compute discriminator loss:
-                    loss_disc = discriminator_loss(y_d_hat_r, y_d_hat_g)
+            with autocast(device_type="cuda", enabled=False):
+                # Compute discriminator loss:
+                loss_disc = discriminator_loss(y_d_hat_r, y_d_hat_g)
 
-                # Discriminator backward and update:
-                optim_d.zero_grad()
-                if train_dtype == torch.float16:
-                    # 0. GradScaler handling
-                    gradscaler.scale(loss_disc).backward()
-                    gradscaler.unscale_(optim_d)
-                    # 1. Grads norm clip
-                    grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=999999)
-                    # 2. Retrieve the clipped grads
-                    grad_norm_d_clipped = commons.get_total_norm([p.grad for p in net_d.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=False)
-                    # 3. Optimization step
-                    gradscaler.step(optim_d)
-                else:
-                    loss_disc.backward()
-                    # 1. Grads norm clip
-                    grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=999999) # 1000 / 999999
-                    # 2. Retrieve the clipped grads
-                    grad_norm_d_clipped = commons.get_total_norm([p.grad for p in net_d.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=True)
-                    # 3. Optimization step
-                    optim_d.step()
+            # Discriminator backward and update:
+            optim_d.zero_grad(set_to_none=True)
+            if train_dtype == torch.float16:
+                gradscaler.scale(loss_disc).backward() # Scale and backward of the loss
+                gradscaler.unscale_(optim_d) # Unscale
+                grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=999999) # Grad clipping
+                grad_norm_d_clipped = commons.get_total_norm([p.grad for p in net_d.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=False) # Grad retrieval for logging
+                gradscaler.step(optim_d) # Optim step
+            else:
+                loss_disc.backward() # Loss backward
+                grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=999999) # Grad clipping
+                grad_norm_d_clipped = commons.get_total_norm([p.grad for p in net_d.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=True) # Grad retrieval for logging
+                optim_d.step() # Optim step
 
             # Run discriminator on generated output
             with autocast(device_type="cuda", enabled=use_amp, dtype=train_dtype):
@@ -1029,27 +988,19 @@ def training_loop(
 
 
             # Generator backward and update:
-            optim_g.zero_grad()
+            optim_g.zero_grad(set_to_none=True)
             if train_dtype == torch.float16:
-                # 0. GradScaler handling
-                gradscaler.scale(loss_gen_total).backward()
-                gradscaler.unscale_(optim_g)
-                # 1. Grads norm clip
-                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=999999)
-                # 2. Retrieve the clipped grads
-                grad_norm_g_clipped = commons.get_total_norm([p.grad for p in net_g.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=False)
-                # 3. Optimization step
-                gradscaler.step(optim_g)
-                gradscaler.update()
+                gradscaler.scale(loss_gen_total).backward() # Scale and backward of the loss
+                gradscaler.unscale_(optim_g) # Unscale
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=999999) # Grad clipping
+                grad_norm_g_clipped = commons.get_total_norm([p.grad for p in net_g.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=False) # Grad retrieval for logging
+                gradscaler.step(optim_g) # Optim step
+                gradscaler.update() # Scaler update, to prepare the scaling for the next iteration
             else:
-                loss_gen_total.backward()
-                # 1. Grads norm clip
-                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=999999) # 1000 / 999999
-                # 2. Retrieve the clipped grads
-                grad_norm_g_clipped = commons.get_total_norm([p.grad for p in net_g.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=True)
-                # 3. Optimization step
-                optim_g.step()
-
+                loss_gen_total.backward() # Loss backward
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=999999) # Grad clipping
+                grad_norm_g_clipped = commons.get_total_norm([p.grad for p in net_g.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=True) # Grad retrieval for logging
+                optim_g.step() # Optim step
 
             if not from_scratch:
                 # Loss accumulation In the epoch_loss_tensor
@@ -1230,11 +1181,6 @@ def training_loop(
                     global_step,
                 )
             # Inferencing on reference sample
-
-#            with torch.amp.autocast(
-#                device_type="cuda", enabled=use_amp, dtype=train_dtype
-#            ):
-
             net_g.eval()
             with torch.no_grad():
                 if hasattr(net_g, "module"):

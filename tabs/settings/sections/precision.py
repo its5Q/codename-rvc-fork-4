@@ -1,9 +1,15 @@
 import gradio as gr
 
-from rvc.configs.config import Config
+from rvc.configs.config import Config, microarchitecture_capability_checker
 
 config = Config()
 
+if microarchitecture_capability_checker():
+    # Ampere-Microarchitecture and higher viable:
+    available_precision_choices = ["fp16", "bf16", "fp32"]
+else:
+    # Below Ampere-Microarchitecture viable:
+    available_precision_choices = ["fp16", "fp32"]
 
 def precision_tab():
     with gr.Row():
@@ -12,11 +18,7 @@ def precision_tab():
             precision = gr.Radio(
                 label="Precision",
                 info="Select the precision you want to use for training and inference.",
-                choices=[
-                    "fp16",
-                    "bf16",
-                    "fp32",
-                ],
+                choices=available_precision_choices,
                 value=config.get_precision(),
                 interactive=True,
             )

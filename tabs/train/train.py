@@ -272,14 +272,14 @@ fp16_check = None
 
 if microarchitecture_capability_checker():
     # Ampere-Microarchitecture and higher viable:
-    initial_optimizer_choices = ["AdamW_BF16", "AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
-    initial_optimizer = "AdamW_BF16"
+    initial_optimizer = "AdamW BF16"
+    initial_optimizer_choices = ["AdamW BF16", "AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
     architecture_choices = ["RVC", "Fork/Applio", "Fork"]
     fp16_check = True
 else:
     # Below Ampere-Microarchitecture viable:
-    initial_optimizer_choices = ["AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
     initial_optimizer = "AdamW"
+    initial_optimizer_choices = ["AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
     architecture_choices = ["RVC", "Fork/Applio"]
     fp16_check = True
 
@@ -333,7 +333,7 @@ def train_tab():
                 vocoder_arch = gr.State("hifi_mrf_refine")
                 optimizer = gr.Radio(
                     label="Optimizer",
-                    info="Choose an optimizer used in training: \n ( If unsure, just leave it as it is. ) \n- **AdamW_BF16:** Good and reliable. ( BF16 ver. with error-correction and kahan summation ) \n- **AdamW:** Normal AdamW. ( **Use the BF16 version unless you train in FP32-only or FP16** ) \n- **RAdam:** Rectified Adam. ( **Can help** with early instability - **Most likely slower convergence** ) \n- **Ranger21:** AdamW + LookAhead and few more extras. ( **Most likely unstable** ) \n- **DiffGrad:** An optimizer with CNN in mind. ( **Probs** a good AdamW alternative - **For finetuning** ) \n- **Prodigy:** A self-tuning optimizer. Lr will adapt automatically ( **Don't touch the lr** )",
+                    info="Choose an optimizer used in training: \n ( If unsure, just leave it as it is. ) \n- **AdamW BF16:** Good and reliable. ( BF16 ver. )  \n- **AdamW:** Normal AdamW. ( **Use the BF16 version unless you train in FP32-only or FP16** ) \n- **RAdam:** Rectified Adam. ( **Can help** with early instability - **Most likely slower convergence** ) \n- **Ranger21:** AdamW + LookAhead and few more extras. ( **Most likely unstable** ) \n- **DiffGrad:** An optimizer with CNN in mind. ( **Probs** a good AdamW alternative - **For finetuning** ) \n- **Prodigy:** A self-tuning optimizer. Lr will adapt automatically ( **Don't touch the lr** )",
                     choices=initial_optimizer_choices,
                     value=initial_optimizer,
                     interactive=True,
@@ -735,13 +735,6 @@ def train_tab():
                         interactive=True,
                         key='use_validation'
                     )
-                    double_d_update = gr.Checkbox(
-                        label="Double-update strategy for Discriminator",
-                        info="Makes it so the Discriminator is being updated twice per step. \n Disabled by default.",
-                        value=False,
-                        interactive=True,
-                        key='double_d_update'
-                    )
                 with gr.Column():
                     use_tf32 = gr.Checkbox(
                         label="use 'TF32' precision",
@@ -972,7 +965,6 @@ def train_tab():
                     lr_scheduler,
                     exp_decay_gamma,
                     use_validation,
-                    double_d_update,
                     use_kl_annealing,
                     kl_annealing_cycle_duration,
                     use_custom_lr,
@@ -1154,7 +1146,7 @@ def train_tab():
                 cleanup, cache_dataset_in_gpu, use_checkpointing,
                 use_tf32, use_benchmark, use_deterministic, spectral_loss,
                 lr_scheduler, exp_decay_gamma, use_validation,
-                double_d_update, custom_pretrained, g_pretrained_path,
+                custom_pretrained, g_pretrained_path,
                 d_pretrained_path, multiple_gpu, training_gpu, use_warmup,
                 warmup_duration, use_custom_lr, custom_lr_g,
                 custom_lr_d, use_kl_annealing, kl_annealing_cycle_duration,

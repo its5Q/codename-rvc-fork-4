@@ -2,6 +2,7 @@ import os
 import glob
 import json
 import signal
+import sys
 
 import torch
 from torch.nn import functional as F
@@ -578,7 +579,6 @@ def print_init_setup(
     use_warmup,
     config,
     optimizer_choice,
-    d_updates_per_step,
     use_validation,
     lr_scheduler,
     exp_decay_gamma,
@@ -615,10 +615,6 @@ def print_init_setup(
 
         # Optimizer check:
         print(f"    ██████  Optimizer used: {optimizer_choice}")
-
-        # Training strategy checks:
-        if d_updates_per_step == 2:
-            print("    ██████  Double-update for Discriminator: Yes")
 
         # Validation check:
         print(f"    ██████  Using Validation: {use_validation}")
