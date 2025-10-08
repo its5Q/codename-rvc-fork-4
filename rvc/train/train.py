@@ -897,7 +897,6 @@ def training_loop(
             # Generator forward pass:
             with autocast(device_type="cuda", enabled=use_amp, dtype=train_dtype):
                 model_output = net_g(phone, phone_lengths, pitch, pitchf, spec, spec_lengths, sid)
-                print(f"vocoder used: {vocoder}")
                 # Unpacking:
                 if vocoder == "RingFormer":
                     y_hat, ids_slice, x_mask, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q), (mag, phase) = (model_output)
