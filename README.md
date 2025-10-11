@@ -5,7 +5,7 @@
 
 </p>
 <p align="center">
-  <a href="https://discord.gg/xEqDU7C2z2" target="_blank"> Codename's Sanctuary</a>
+  <a href="https://discord.gg/nQFpNBvvd3" target="_blank"> Codename's Sanctuary</a>
 </p>
 
 <p align="center"> ㅤㅤ👆 To stay up-to-date with advancements, hang out or get support 👆ㅤㅤ </p>
