@@ -10,7 +10,7 @@
         "bf16_run": false,
         "fp16_run": true,
         "lr_decay": 0.999875,
-        "segment_size": 12800,
+        "segment_size": 11520,
         "c_mel": 45,
         "c_kl": 1.0
     },
@@ -25,6 +25,8 @@
         "mel_fmax": null
     },
     "model": {
+        "gen_istft_n_fft": 80,
+        "gen_istft_hop_size": 20,
         "inter_channels": 192,
         "hidden_channels": 192,
         "filter_channels": 768,
@@ -57,20 +59,35 @@
             ]
         ],
         "upsample_rates": [
-            10,
-            8,
-            2,
-            2
+            4,
+            4
         ],
         "upsample_initial_channel": 512,
         "upsample_kernel_sizes": [
-            20,
-            16,
-            4,
-            4
+            8,
+            8
         ],
         "use_spectral_norm": false,
         "gin_channels": 256,
         "spk_embed_dim": 109
+    },
+    "mrd": {
+        "resolutions": [
+            [
+                1024,
+                120,
+                600
+            ],
+            [
+                2048,
+                240,
+                1200
+            ],
+            [
+                512,
+                50,
+                240
+            ]
+        ]
     }
 }

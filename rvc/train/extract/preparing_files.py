@@ -9,7 +9,6 @@ current_directory = os.getcwd()
 
 
 def generate_config(sample_rate: int, model_path: str, vocoder_arch: str):
-
     config_path = os.path.join("rvc", "configs", vocoder_arch, f"{sample_rate}.json")
     config_save_path = os.path.join(model_path, "config.json")
     if not os.path.exists(config_save_path):

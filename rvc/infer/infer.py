@@ -558,7 +558,7 @@ class VoiceConverter:
                 for i, value in enumerate(self.active_cpt["ringformer_istft"]):
                     print(f"  [{i}] = {value}")
 
-            if self.vocoder == "RingFormer":
+            if self.vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                 ringformer_istft = self.active_cpt.get("ringformer_istft", [None, None])
                 self.gen_istft_n_fft = ringformer_istft[0]
                 self.gen_istft_hop_size = ringformer_istft[1]

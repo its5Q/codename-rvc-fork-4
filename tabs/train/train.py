@@ -280,7 +280,7 @@ else:
     # Below Ampere-Microarchitecture viable:
     initial_optimizer = "AdamW"
     initial_optimizer_choices = ["AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
-    architecture_choices = ["RVC", "Fork/Applio"]
+    architecture_choices = ["RVC", "Fork/Applio",  "Wavehax"]
     fp16_check = True
 
 # FP16 checker
@@ -1091,7 +1091,7 @@ def train_tab():
                         vocoder_arch_value,
                     )
                 elif architecture == "Fork":
-                    vocoder_arch_value = "ringformer"
+                    vocoder_arch_value = "ringformer_v2"
                     return (
                         {
                             "choices": ["24000", "32000", "40000", "48000"],
@@ -1099,10 +1099,10 @@ def train_tab():
                             "value": "48000",
                         },
                         {
-                            "choices": ["RingFormer"],
+                            "choices": ["RingFormer_v1", "RingFormer_v2", "Wavehax"],
                             "__type__": "update",
-                            "interactive": False,
-                            "value": "RingFormer",
+                            "interactive": True,
+                            "value": "RingFormer_v2",
                         },
                         vocoder_arch_value,
                     )
@@ -1122,6 +1122,39 @@ def train_tab():
                         },
                         vocoder_arch_value,
                     )
+            def fork_vocoder_handler(architecture, vocoder_arch, vocoder):
+                if architecture == "Fork" and vocoder == "Wavehax":
+                    vocoder_arch_value = "wavehax"
+                    return (
+                        {
+                            "choices": ["24000", "48000"],
+                            "__type__": "update",
+                            "value": "48000",
+                        },
+                        vocoder_arch_value,
+                    )
+                elif architecture == "Fork" and vocoder == "RingFormer_v1":
+                    vocoder_arch_value = "ringformer_v1"
+                    return (
+                        {
+                            "choices": ["24000", "32000", "40000", "48000"],
+                            "__type__": "update",
+                            "value": "48000",
+                        },
+                        vocoder_arch_value,
+                    )
+                elif architecture == "Fork" and vocoder == "RingFormer_v2":
+                    vocoder_arch_value = "ringformer_v2"
+                    return (
+                        {
+                            "choices": ["24000", "32000", "40000", "48000"],
+                            "__type__": "update",
+                            "value": "48000",
+                        },
+                        vocoder_arch_value,
+                    )
+                else:
+                    return gr.skip()
 
             def update_noise_reduce_slider_visibility(noise_reduction):
                 return gr.update(visible=noise_reduction)
@@ -1212,6 +1245,11 @@ def train_tab():
                 fn=toggle_architecture,
                 inputs=[architecture],
                 outputs=[sampling_rate, vocoder, vocoder_arch],
+            )
+            vocoder.change( 
+                fn=fork_vocoder_handler,
+                inputs=[architecture, vocoder_arch, vocoder],
+                outputs=[sampling_rate, vocoder_arch],
             )
             refresh.click(
                 fn=refresh_models_and_datasets,

@@ -70,7 +70,7 @@ def load_checkpoint(architecture, checkpoint_path, model, optimizer=None, load_o
         )
 
     # Safety check / fix for Future RingFormer and RefineGAN models that were saved before the better key handling was added:
-    if architecture in ["Fork", "Fork/Applio"]:
+    if architecture != "RVC":
         if any(key.endswith(".weight_v") for key in checkpoint_dict["model"].keys()) and any(key.endswith(".weight_g") for key in checkpoint_dict["model"].keys()):
             print(f"[WARNING] Detected {architecture} architecture, fixing keys by converting .weight_v and .weight_g back to .parametrizations.weight.original1 and .parametrizations.weight.original0.")
             checkpoint_dict = replace_keys_in_dict(
@@ -518,7 +518,7 @@ def verify_remap_checkpoint(checkpoint_path, model, architecture):
                 model.module.load_state_dict(checkpoint_state_dict, strict=strict_mode)
             else:
                 model.load_state_dict(checkpoint_state_dict, strict=strict_mode)
-        elif architecture in ["Fork", "Fork/Applio"]:
+        elif architecture != "RVC":
             print("Non-RVC architecture pretrains detected. Checking for old keys...")
             
             # Check for old keys and remap them if found
@@ -600,8 +600,10 @@ def print_init_setup(
             else:
                 print("    ██████  PRECISION: FP32 / BF16 - AMP")
         elif config.train.fp16_run:
-            print("    ██████  PRECISION: FP32 / BF16 - AMP")
-
+            if torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32:
+                print("    ██████  PRECISION: TF32 / FP16 - AMP")
+            else:
+                print("    ██████  PRECISION: FP32 / FP16 - AMP")
         # cudnn backend checks:
         if torch.backends.cudnn.benchmark:
             print("    ██████  cudnn.benchmark: True")

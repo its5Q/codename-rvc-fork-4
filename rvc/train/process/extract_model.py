@@ -61,7 +61,8 @@ def extract_model(
             }
         )
 
-        opt["config"] = [
+        # Base configuration list
+        config_list = [
             hps.data.filter_length // 2 + 1,
             32,
             hps.model.inter_channels,
@@ -81,6 +82,15 @@ def extract_model(
             hps.model.gin_channels,
             hps.data.sample_rate,
         ]
+        # Unused params and configuration entries for certain vocoders
+        if vocoder == "Wavehax":
+            config_list.remove(hps.model.upsample_rates)
+            config_list.remove(hps.model.upsample_initial_channel)
+            config_list.remove(hps.model.upsample_kernel_sizes)
+
+        # Assigning to opt config
+        opt["config"] = config_list
+
 
         opt["epoch"] = epoch
         opt["step"] = step
@@ -99,7 +109,7 @@ def extract_model(
         opt["vocoder"] = vocoder
         opt["vocoder_architecture"] = vocoder_architecture
 
-        if vocoder == "RingFormer":
+        if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
             opt["ringformer_istft"] = [
                 hps.model.gen_istft_n_fft,
                 hps.model.gen_istft_hop_size,
@@ -115,7 +125,8 @@ def extract_model(
                 ".weight_g",
             )
         # Check for old keys for non-RVC architecture
-        elif architecture in ["Fork", "Fork/Applio"]:
+        elif architecture != "RVC":
+        #elif architecture in ["Fork", "Fork/Applio"]:
             if any(key.endswith(".weight_v") for key in opt.keys()) and any(key.endswith(".weight_g") for key in opt.keys()):
                 opt = replace_keys_in_dict(
                     opt, 

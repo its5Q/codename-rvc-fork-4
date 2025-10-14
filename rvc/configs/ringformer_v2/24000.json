@@ -1,6 +1,5 @@
 {
     "train": {
-        "log_interval": 200,
         "seed": 1234,
         "learning_rate": 0.0001,
         "betas": [
@@ -26,8 +25,8 @@
         "mel_fmax": null
     },
     "model": {
-        "gen_istft_n_fft": 60,
-        "gen_istft_hop_size": 15,
+        "gen_istft_n_fft": 16,
+        "gen_istft_hop_size": 4,
         "inter_channels": 192,
         "hidden_channels": 192,
         "filter_channels": 768,
@@ -60,13 +59,13 @@
             ]
         ],
         "upsample_rates": [
-            4,
-            4
+            10,
+            6
         ],
         "upsample_initial_channel": 512,
         "upsample_kernel_sizes": [
-            8,
-            8
+            20,
+            12
         ],
         "use_spectral_norm": false,
         "gin_channels": 256,

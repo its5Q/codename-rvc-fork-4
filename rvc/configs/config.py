@@ -8,11 +8,23 @@ arch_config_paths = {
         os.path.join("hifi_mrf_refine", "40000.json"),
         os.path.join("hifi_mrf_refine", "32000.json"),
     ],
-    "ringformer": [
-        os.path.join("ringformer", "48000.json"),
-        os.path.join("ringformer", "40000.json"),
-        os.path.join("ringformer", "32000.json"),
-        os.path.join("ringformer", "24000.json"),
+    "ringformer_v1": [
+        os.path.join("ringformer_v1", "48000.json"),
+        os.path.join("ringformer_v1", "40000.json"),
+        os.path.join("ringformer_v1", "32000.json"),
+        os.path.join("ringformer_v1", "24000.json"),
+    ],
+    "ringformer_v2": [
+        os.path.join("ringformer_v2", "48000.json"),
+        os.path.join("ringformer_v2", "40000.json"),
+        os.path.join("ringformer_v2", "32000.json"),
+        os.path.join("ringformer_v2", "24000.json"),
+    ],
+    "wavehax": [
+        os.path.join("wavehax", "48000.json"),
+        os.path.join("wavehax", "40000.json"),
+        os.path.join("wavehax", "32000.json"),
+        os.path.join("wavehax", "24000.json"),
     ],
 }
 
@@ -78,7 +90,31 @@ class Config:
             except FileNotFoundError:
                 print(f"File not found: {full_config_path}")
 
-        for config_path in arch_config_paths["ringformer"]:
+        for config_path in arch_config_paths["ringformer_v1"]:
+            full_config_path = os.path.join("rvc", "configs", config_path)
+            try:
+                with open(full_config_path, "r") as f:
+                    config = json.load(f)
+                config["train"]["fp16_run"] = fp16_run_value
+                config["train"]["bf16_run"] = bf16_run_value
+                with open(full_config_path, "w") as f:
+                    json.dump(config, f, indent=4)
+            except FileNotFoundError:
+                print(f"File not found: {full_config_path}")
+
+        for config_path in arch_config_paths["ringformer_v2"]:
+            full_config_path = os.path.join("rvc", "configs", config_path)
+            try:
+                with open(full_config_path, "r") as f:
+                    config = json.load(f)
+                config["train"]["fp16_run"] = fp16_run_value
+                config["train"]["bf16_run"] = bf16_run_value
+                with open(full_config_path, "w") as f:
+                    json.dump(config, f, indent=4)
+            except FileNotFoundError:
+                print(f"File not found: {full_config_path}")
+
+        for config_path in arch_config_paths["wavehax"]:
             full_config_path = os.path.join("rvc", "configs", config_path)
             try:
                 with open(full_config_path, "r") as f:

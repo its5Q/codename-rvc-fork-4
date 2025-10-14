@@ -6,7 +6,7 @@ from torch.nn.utils.parametrizations import weight_norm
 
 # for resblock_s and resblock_s_mask
 import torch.nn as nn
-from torch.nn import Conv1d
+from torch.nn import Conv1d, PReLU
 
 import torch.nn.functional as F
 
@@ -16,10 +16,7 @@ from rvc.lib.algorithm.commons import get_padding, init_weights
 from rvc.lib.algorithm.conformer.snake_fused_triton import Snake # Fused Triton variant
 from rvc.lib.algorithm.conformer.activations import SnakeBeta
 
-
 LRELU_SLOPE = 0.1
-
-
 
 class Swish(torch.nn.Module):
     def __init__(self, beta=1.0, learnable=True):
@@ -53,6 +50,64 @@ def apply_mask(tensor: torch.Tensor, mask: Optional[torch.Tensor]):
 def apply_mask_(tensor: torch.Tensor, mask: Optional[torch.Tensor]):
     return tensor.mul_(mask) if mask else tensor
 
+
+class ResBlock_PReLU(torch.nn.Module):
+    """
+    A residual block module that applies a series of 1D convolutional layers
+    with residual connections using Parametric ReLU activation.
+    """
+    def __init__(
+        self,
+        channels: int,
+        kernel_size: int = 3,
+        dilations: Tuple[int] = (1, 3, 5),
+    ):
+        super().__init__()
+        num_layers = len(dilations)
+
+        self.act1 = torch.nn.ModuleList([
+            PReLU(num_parameters=channels, init=0.1) for _ in range(num_layers)
+        ])
+        self.act2 = torch.nn.ModuleList([
+            PReLU(num_parameters=channels, init=0.1) for _ in range(num_layers)
+        ])
+
+        self.convs1 = self._create_convs(channels, kernel_size, dilations)
+        self.convs2 = self._create_convs(channels, kernel_size, [1] * num_layers)
+
+    @staticmethod
+    def _create_convs(channels: int, kernel_size: int, dilations: Tuple[int]):
+        """
+        Creates a list of 1D convolutional layers with specified dilations.
+        """
+        layers = torch.nn.ModuleList(
+            [create_conv1d_layer(channels, kernel_size, d) for d in dilations]
+        )
+        layers.apply(init_weights)
+        return layers
+
+    def forward(self, x: torch.Tensor, x_mask: torch.Tensor = None):
+        for i, (conv1, conv2) in enumerate(zip(self.convs1, self.convs2)):
+
+            x_residual = x
+
+            xt = self.act1[i](x) 
+            xt = apply_mask(xt, x_mask)
+            xt = conv1(xt)
+
+            xt = self.act2[i](xt)
+            xt = apply_mask(xt, x_mask)
+            xt = conv2(xt)
+
+            x = xt + x_residual
+
+            x = apply_mask(x, x_mask)
+
+        return x
+
+    def remove_weight_norm(self):
+        for conv in chain(self.convs1, self.convs2):
+            remove_weight_norm(conv)
 
 
 class ResBlock_SnakeBeta(torch.nn.Module):

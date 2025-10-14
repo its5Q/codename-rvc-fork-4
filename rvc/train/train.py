@@ -19,12 +19,8 @@ from time import time as ttime, sleep
 
 import numpy as np
 import psutil
-import matplotlib.pyplot as plt #
-import loss_landscapes #
 from tqdm import tqdm
 from pesq import pesq
-from mpl_toolkits.mplot3d import Axes3D #
-from loss_landscapes.metrics import Loss #
 
 import torch
 import torch.nn as nn
@@ -282,9 +278,17 @@ def get_g_model(config, sample_rate, vocoder, use_checkpointing, randomized):
     )
 
 def get_d_model(config, vocoder, use_checkpointing):
-    if vocoder == "RingFormer":
+    if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
         from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_Combined
         # MPD + MSD + MRD ( unified ) - RingFormer architecture v1
+        return MPD_MSD_MRD_Combined(
+            config.model.use_spectral_norm,
+            use_checkpointing=use_checkpointing,
+            **dict(config.mrd)
+        )
+    elif vocoder == "Wavehax":
+        from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_Combined
+        # MPD + MSD + MRD ( unified ) - Wavehax architecture
         return MPD_MSD_MRD_Combined(
             config.model.use_spectral_norm,
             use_checkpointing=use_checkpointing,
@@ -416,7 +420,6 @@ def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkp
     # If no checkpoints are available, using the Pretrains directly
         epoch_str = 1
         global_step = 0
-
         # Loading the pretrained Generator model
         if (pretrainG != "" and pretrainG != "None"):
             if rank == 0:
@@ -711,7 +714,7 @@ def run(
     )
 
     # Hann window for stft ( for RingFormer only. )
-    hann_window = torch.hann_window(config.model.gen_istft_n_fft).to(device) if vocoder == "RingFormer" else None
+    hann_window = torch.hann_window(config.model.gen_istft_n_fft).to(device) if vocoder in ["RingFormer_v1", "RingFormer_v2"] else None
 
     # GradScaler for FP16 training
     gradscaler = torch.amp.GradScaler(enabled=(device.type == "cuda" and train_dtype == torch.float16))
@@ -848,7 +851,7 @@ def training_loop(
 
     if not from_scratch:
         # Tensors init for averaged losses:
-        tensor_count = 7 if vocoder == "RingFormer" else 6
+        tensor_count = 7 if vocoder in ["RingFormer_v1", "RingFormer_v2"] else 6
         epoch_loss_tensor = torch.zeros(tensor_count, device=device)
         num_batches_in_epoch = 0
 
@@ -863,7 +866,7 @@ def training_loop(
         "loss_kl_50": deque(maxlen=50),
 
     }
-    if vocoder == "RingFormer":
+    if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
         avg_50_cache.update({
             "loss_sd_50": deque(maxlen=50),
         })
@@ -898,7 +901,7 @@ def training_loop(
             with autocast(device_type="cuda", enabled=use_amp, dtype=train_dtype):
                 model_output = net_g(phone, phone_lengths, pitch, pitchf, spec, spec_lengths, sid)
                 # Unpacking:
-                if vocoder == "RingFormer":
+                if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                     y_hat, ids_slice, x_mask, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q), (mag, phase) = (model_output)
                 else:
                     y_hat, ids_slice, x_mask, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q) = (model_output)
@@ -912,7 +915,7 @@ def training_loop(
                         dim=3,
                     )
 
-            if vocoder == "RingFormer":
+            if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                 reshaped_y = y.view(-1, y.size(-1))
                 reshaped_y_hat = y_hat.view(-1, y_hat.size(-1))
                 y_stft = torch.stft(reshaped_y, n_fft=config.model.gen_istft_n_fft, hop_length=config.model.gen_istft_hop_size, win_length=config.model.gen_istft_n_fft, window=hann_window, return_complex=True)
@@ -973,14 +976,14 @@ def training_loop(
 
                 loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * config.train.c_kl
 
-                if vocoder == "RingFormer":
+                if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                     # RingFormer related;  Phase, Magnitude and SD:
                     loss_magnitude = torch.nn.functional.l1_loss(mag, target_magnitude)
                     loss_phase = phase_loss(y_stft, y_hat_stft)
                     loss_sd = (loss_magnitude + loss_phase) * 0.7
 
                 # Total generator loss
-                if vocoder == "RingFormer":
+                if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                     loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl * kl_beta + loss_sd
                 else:
                     loss_gen_total = loss_adv + loss_fm + loss_mel + loss_kl * kl_beta
@@ -1009,7 +1012,7 @@ def training_loop(
                 epoch_loss_tensor[3].add_(loss_fm.detach())
                 epoch_loss_tensor[4].add_(loss_mel.detach())
                 epoch_loss_tensor[5].add_(loss_kl.detach())
-                if vocoder == "RingFormer":
+                if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                     epoch_loss_tensor[6].add_(loss_sd.detach())
 
             # queue for rolling losses / grads over 50 steps
@@ -1023,7 +1026,7 @@ def training_loop(
             avg_50_cache["loss_fm_50"].append(loss_fm.detach())
             avg_50_cache["loss_mel_50"].append(loss_mel.detach())
             avg_50_cache["loss_kl_50"].append(loss_kl.detach())
-            if vocoder == "RingFormer":
+            if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                 avg_50_cache["loss_sd_50"].append(loss_sd.detach())
 
             if rank == 0 and global_step % 50 == 0:
@@ -1064,7 +1067,7 @@ def training_loop(
                     "loss_avg_50/loss_kl_50": torch.mean(
                         torch.stack(list(avg_50_cache["loss_kl_50"]))),
                 })
-                if vocoder == "RingFormer":
+                if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                     scalar_dict_50.update({
                         # Losses:
                         "loss_avg_50/loss_sd_50": torch.mean(
@@ -1144,7 +1147,7 @@ def training_loop(
                     "learning_rate/prodigy_lr_g": prodigy_lr_g,
                     "learning_rate/prodigy_lr_d": prodigy_lr_d,
                 })
-            if vocoder == "RingFormer":
+            if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                 scalar_dict_avg.update({
                     "loss_avg/loss_sd": avg_epoch_loss[6],
                 })
