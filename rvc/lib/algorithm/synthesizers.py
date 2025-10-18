@@ -3,7 +3,7 @@ from typing import Optional, List
 import random
 
 from rvc.lib.algorithm.commons import slice_segments, rand_slice_segments
-from rvc.lib.algorithm.residuals import ResidualCouplingBlock
+from rvc.lib.algorithm.normalizing_flows import ResidualCouplingBlock
 from rvc.lib.algorithm.encoders import TextEncoder, PosteriorEncoder
 
 debug_shapes = False
@@ -109,7 +109,7 @@ class Synthesizer(torch.nn.Module):
                     sr=sr,
                     checkpointing=checkpointing,
                 )
-                print("    ██████  Vocoder: RingFormer")
+                print(f"    ██████  Vocoder: {vocoder}")
             elif vocoder == "Wavehax":
                 from rvc.lib.algorithm.generators import WavehaxGenerator
                 self.dec = WavehaxGenerator(
@@ -128,7 +128,21 @@ class Synthesizer(torch.nn.Module):
                     use_logmag_phase=use_logmag_phase,
                 )
                 print("    ██████  Vocoder: Wavehax")
-            else:
+            elif vocoder == "Snake-HiFi-GAN":
+                from rvc.lib.algorithm.generators import SnakeHiFiGANNSFGenerator
+                self.dec = SnakeHiFiGANNSFGenerator(
+                    inter_channels,
+                    resblock_kernel_sizes,
+                    resblock_dilation_sizes,
+                    upsample_rates,
+                    upsample_initial_channel,
+                    upsample_kernel_sizes,
+                    gin_channels=gin_channels,
+                    sr=sr,
+                    checkpointing=checkpointing,
+                )
+                print("    ██████  Vocoder: Snake-NSF-HiFi-GAN")
+            else:  # vocoder == "HiFi-GAN"
                 from rvc.lib.algorithm.generators import HiFiGANNSFGenerator
                 self.dec = HiFiGANNSFGenerator(
                     inter_channels,
@@ -141,18 +155,12 @@ class Synthesizer(torch.nn.Module):
                     sr=sr,
                     checkpointing=checkpointing,
                 )
-                print("    ██████  Vocoder: NSF-HiFi-GAN.")
+                print("    ██████  Vocoder: NSF-HiFi-GAN")
         else:
-            if vocoder == "MRF HiFi-GAN":
-                print("MRF HiFi-GAN does not support training without pitch guidance.")
+            if vocoder in ["MRF HiFi-GAN", "RefineGAN", "RingFormer_v1", "RingFormer_v2", "Wavehax"]:
+                print(f"{vocoder} does not support training without pitch guidance.")
                 self.dec = None
-            elif vocoder == "RefineGAN":
-                print("RefineGAN does not support training without pitch guidance.")
-                self.dec = None
-            elif vocoder == "RingFormer":
-                print("RingFormer does not support training without pitch guidance.")
-                self.dec = None
-            else:
+            else: # vocoder == "HiFi-GAN"
                 from rvc.lib.algorithm.generators import HiFiGANGenerator
                 self.dec = HiFiGANGenerator(
                     inter_channels,

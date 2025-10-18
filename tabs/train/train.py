@@ -323,7 +323,7 @@ def train_tab():
                 )
                 architecture = gr.Radio(
                     label="Architecture",
-                    info="Choose the model architecture:\n- **RVC (V2):ㅤDefault/OG-Architecture - Compatible with all clients.**\n- **Fork/Applio:ㅤOG-Arch's discs + RefineGAN** - Only for this Fork or Applio **( Experimental. )** \n- **Fork:ㅤRingFormer-Architecture** - Only for this Fork **( Exclusive. )**",
+                    info="Choose the model architecture:\n- **RVC (V2):ㅤDefault/OG-Architecture - Compatible with all clients.**\n- **Fork/Applio:ㅤOG-Arch's discs + RefineGAN/MRF-HiFi-GAN** - Only for this Fork or Applio **( Experimental. )** \n- **Fork:ㅤCodename-selected custom archs** - Only for this Fork **( Exclusive. )**",
                     choices=architecture_choices,
                     value="RVC",
                     interactive=True,
@@ -351,7 +351,7 @@ def train_tab():
                 )
                 vocoder = gr.Radio(
                     label="Vocoder",
-                    info="**Vocoder for audio synthesis:** \n \n **HiFi-GAN:** \n- **Decent-Quality:ㅤGood ol' NSF-HiFi-GAN - Reliable, but has it's issues. ( RVC's og vocoder )** \n- **COMPATIBILITY:ㅤAll clients incl. Mainline RVC / W-okada etc.** \n\n**RefineGAN:** \n - **High-Quality(?):ㅤNSF-HiFi-Gan + ParallelResBlock + AdaIN** \n- **COMPATIBILITY:ㅤThis Fork or Applio ( afaik, no rt-vc clients support it. )** \n\n**RingFormer:** \n- **Highest-Quality:ㅤA hybrid Conformer-Based Vocoder + Snake-Beta act. + RingAttention** \n- **COMPATIBILITY:ㅤThis Fork ( As for rt-vc, 'Vonovox' supports it. )** \n\n **NOTES:** \n **( RingFormer Requires min. RTX 30xx [ At least Ampere microarchitecture ] )** \n **( Each Vocoder and it's supported sample rates require appropriate pretrained models. )**",
+                    info="**Vocoder for audio synthesis:** \n \n **HiFi-GAN:** \n- **Overview:ㅤHiFi-GAN + Hn-NSF for f0 handling. ( RVC's og vocoder )** \n- **COMPATIBILITY:ㅤAll clients incl. Mainline RVC / W-okada etc.** \n\n**MRF HiFi-GAN:** \n - **Overview:ㅤHiFi-Gan + Hn-NSF + MRF block** \n- **COMPATIBILITY:ㅤThis Fork or Applio ( afaik, no rt-vc clients support it. )** \n\n**RefineGAN:** \n - **Overview:ㅤHiFi-Gan + Hn-NSF + ParallelResBlock + AdaIN** \n- **COMPATIBILITY:ㅤThis Fork or Applio ( afaik, no rt-vc clients support it. )** \n\n**RingFormer:** \n- **Overview:ㅤA hybrid Conformer-Based Vocoder + Snake-Beta act. + RingAttention + Hn-NSF** \n- **COMPATIBILITY:ㅤThis Fork ( As for rt-vc, 'Vonovox' supports it. )**  \n\n**Snake-HiFi-GAN:** \n- **Overview:ㅤHiFi-GAN + Hn-NSF + General Snake act usage** \n- **COMPATIBILITY:ㅤThis Fork ( No rt-vc clients support it atm. )** \n\n **NOTES:** \n **( RingFormer Requires min. RTX 30xx [ At least Ampere microarchitecture ] )** \n **( Each Vocoder and it's supported sample rates require appropriate pretrained models. )**",
                     choices=["HiFi-GAN"],
                     value="HiFi-GAN",
                     interactive=False,
@@ -1083,9 +1083,9 @@ def train_tab():
                             "__type__": "update",
                         },
                         {
-                            "choices": ["RefineGAN"],
+                            "choices": ["RefineGAN", "MRF HiFi-GAN"],
                             "__type__": "update",
-                            "interactive": False,
+                            "interactive": True,
                             "value": "RefineGAN",
                         },
                         vocoder_arch_value,
@@ -1099,7 +1099,7 @@ def train_tab():
                             "value": "48000",
                         },
                         {
-                            "choices": ["RingFormer_v1", "RingFormer_v2", "Wavehax"],
+                            "choices": ["RingFormer_v1", "RingFormer_v2", "Wavehax", "Snake-HiFi-GAN"],
                             "__type__": "update",
                             "interactive": True,
                             "value": "RingFormer_v2",
@@ -1145,6 +1145,16 @@ def train_tab():
                     )
                 elif architecture == "Fork" and vocoder == "RingFormer_v2":
                     vocoder_arch_value = "ringformer_v2"
+                    return (
+                        {
+                            "choices": ["24000", "32000", "40000", "48000"],
+                            "__type__": "update",
+                            "value": "48000",
+                        },
+                        vocoder_arch_value,
+                    )
+                elif architecture == "Fork" and vocoder == "Snake-HiFi-GAN":
+                    vocoder_arch_value = "snake_nsf_hifigan"
                     return (
                         {
                             "choices": ["24000", "32000", "40000", "48000"],

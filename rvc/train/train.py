@@ -153,7 +153,6 @@ benchmark_mode = False
 enable_persistent_workers = True
 debug_shapes = False
 
-
 # EXPERIMENTAL
 c_stft = 21.0 # Seems close enough to multi-scale mel loss's magnitude, but needs more testing.
 ##################################################################
@@ -181,6 +180,16 @@ class EpochRecorder:
         current_time = datetime.datetime.now().strftime("%H:%M:%S")
 
         return f"Current time: {current_time} | Time per epoch: {elapsed_time_str}"
+
+def eval_infer(net_g, reference):
+    net_g.eval()
+    with torch.no_grad():
+        if hasattr(net_g, "module"):
+            o, *_ = net_g.module.infer(*reference)
+        else:
+            o, *_ = net_g.infer(*reference)
+    net_g.train()
+    return o
 
 def setup_env_and_distr(rank, n_gpus, device, device_id, config):
     if rank == 0:
@@ -286,9 +295,15 @@ def get_d_model(config, vocoder, use_checkpointing):
             use_checkpointing=use_checkpointing,
             **dict(config.mrd)
         )
-    elif vocoder == "Wavehax":
+    elif vocoder == "Wavehax": # Potentially changed in future - Trial
         from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_Combined
-        # MPD + MSD + MRD ( unified ) - Wavehax architecture
+        return MPD_MSD_MRD_Combined(
+            config.model.use_spectral_norm,
+            use_checkpointing=use_checkpointing,
+            **dict(config.mrd)
+        )
+    elif vocoder == "Snake-HiFi-GAN": # Potentially changed in future - Trial
+        from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_Combined
         return MPD_MSD_MRD_Combined(
             config.model.use_spectral_norm,
             use_checkpointing=use_checkpointing,
@@ -1183,13 +1198,7 @@ def training_loop(
                     global_step,
                 )
             # Inferencing on reference sample
-            net_g.eval()
-            with torch.no_grad():
-                if hasattr(net_g, "module"):
-                    o, *_ = net_g.module.infer(*reference)
-                else:
-                    o, *_ = net_g.infer(*reference)
-            net_g.train()
+            o = eval_infer(net_g, reference)
             audio_dict = {f"gen/audio_{epoch}e_{global_step}s": o[0, :, :]} # Eval-infer samples
             # Logging
             summarize(

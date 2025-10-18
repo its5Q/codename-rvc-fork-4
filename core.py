@@ -2015,9 +2015,10 @@ def parse_arguments():
         type=str,
         help="Choose the vocoder architecture",
         choices=[
-            "hifi_mrf_refine", # NSF-HiFi-GAN, MRF-HiFi-GAN and RefineGAN Share the same base config
+            "hifi_mrf_refine", # [NSF-HiFi-GAN, MRF-HiFi-GAN, RefineGAN, Snake-NSF-HiFi-GAN ] ~ They share the same base config
             "ringformer",
             "wavehax",
+            "snake_nsf_hifigan",
         ],
         default="hifi_mrf_refine",
     )
@@ -2060,7 +2061,7 @@ def parse_arguments():
         "--vocoder",
         type=str,
         help="Vocoder name",
-        choices=["HiFi-GAN", "MRF HiFi-GAN", "RefineGAN", "RingFormer_v1", "RingFormer_v2", "Wavehax"],
+        choices=["HiFi-GAN", "Snake-HiFi-GAN", "MRF HiFi-GAN", "RefineGAN", "RingFormer_v1", "RingFormer_v2", "Wavehax"],
         default="HiFi-GAN",
     )
     train_parser.add_argument(

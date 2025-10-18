@@ -148,13 +148,9 @@ class SourceModuleHnNSF(torch.nn.Module):
         return sine_merge, None, None
 
 
-class HiFiGANNSFGenerator(torch.nn.Module):
+class SnakeHiFiGANNSFGenerator(torch.nn.Module):
     """
-    Generator module based on the Neural Source Filter (NSF) architecture.
-
-    This generator synthesizes audio by first generating a source excitation signal
-    (harmonic and noise) and then filtering it through a series of upsampling and
-    residual blocks. Global conditioning can be applied to influence the generation.
+    HiFi-GAN Generator incorporating Harmonic noise + Neural Source Filter (HN-NSF) + utilizing snake activation.
 
     Args:
         initial_channel (int): Number of input channels to the initial convolutional layer.
@@ -180,16 +176,17 @@ class HiFiGANNSFGenerator(torch.nn.Module):
         sr: int,
         checkpointing: bool = False,
     ):
-        super(HiFiGANNSFGenerator, self).__init__()
+        super(SnakeHiFiGANNSFGenerator, self).__init__()
 
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
 
         self.checkpointing = checkpointing
 
-
-        self.conv_pre = torch.nn.Conv1d(
-            initial_channel, upsample_initial_channel, 7, 1, padding=3
+        self.conv_pre = weight_norm(
+            torch.nn.Conv1d(
+                initial_channel, upsample_initial_channel, 7, 1, padding=3
+            )
         )
 
         '''
@@ -200,7 +197,7 @@ class HiFiGANNSFGenerator(torch.nn.Module):
             - ResBlock_SnakeBeta: 'ResBlock1' which is using Snake-Beta instead of Snake. Has learnable both alphas and betas ; https://github.com/NVIDIA/BigVGAN/blob/main/activations.py
             - ResBlock_PReLU:  'ResBlock1' Which uses Parametric ReLU with learnable slope per param.
         '''
-        ResBlock_Type = ResBlock_PReLU
+        ResBlock_Type = ResBlock_Snake_Fused
 
         self.m_source = SourceModuleHnNSF(sample_rate=sr, harmonic_num=0)
         self.f0_ups_factor = math.prod(upsample_rates)
@@ -221,9 +218,7 @@ class HiFiGANNSFGenerator(torch.nn.Module):
         ]
 
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
-            # handling odd upsampling rates
             if u % 2 == 0:
-                # old method
                 padding = (k - u) // 2
             else:
                 padding = u // 2 + u % 2
@@ -276,7 +271,6 @@ class HiFiGANNSFGenerator(torch.nn.Module):
     ):
         har_source, _, _ = self.m_source(f0, self.f0_ups_factor) 
         har_source = har_source.transpose(1, 2)
-        # new tensor
         x = self.conv_pre(x)
 
         if g is not None:
@@ -307,12 +301,24 @@ class HiFiGANNSFGenerator(torch.nn.Module):
         return x
 
     def remove_weight_norm(self):
+        # for conv_pre
+        remove_weight_norm(self.conv_pre)
+        # for upsampling
         for l in self.ups:
             remove_weight_norm(l)
+        # for resblocks
         for l in self.resblocks:
             l.remove_weight_norm()
 
     def __prepare_scriptable__(self):
+        # for conv_pre
+        for hook in self.conv_pre._forward_pre_hooks.values():
+            if (
+                hook.__module__ == "torch.nn.utils.parametrizations.weight_norm"
+                and hook.__class__.__name__ == "WeightNorm"
+            ):
+                remove_weight_norm(self.conv_pre)
+        # for upsampling
         for l in self.ups:
             for hook in l._forward_pre_hooks.values():
                 if (
@@ -320,6 +326,7 @@ class HiFiGANNSFGenerator(torch.nn.Module):
                     and hook.__class__.__name__ == "WeightNorm"
                 ):
                     remove_weight_norm(l)
+        # for resblocks
         for l in self.resblocks:
             for hook in l._forward_pre_hooks.values():
                 if (
