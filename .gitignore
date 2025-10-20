@@ -45,3 +45,5 @@ EXTRAS/transfer.py
 rvc/configs/config - backup.py
 rvc/train/preprocess/preprocess - LUFS WITHOUT SAFETY.py
 EXTRAS/uvmp_extractor.py
+rvc/train/train_debug.py
+rvc/train/train - Copy fail bench.py

@@ -115,10 +115,11 @@ def load_checkpoint(architecture, checkpoint_path, model, optimizer=None, load_o
         optimizer,
         checkpoint_dict.get("learning_rate", 0),
         checkpoint_dict["iteration"],
+        checkpoint_dict.get("gradscaler", {})
     )
 
 
-def save_checkpoint(architecture, model, optimizer, learning_rate, iteration, checkpoint_path):
+def save_checkpoint(architecture, model, optimizer, learning_rate, iteration, checkpoint_path, gradscaler=None):
     """
     Save the model and optimizer state to a checkpoint file.
 
@@ -139,6 +140,10 @@ def save_checkpoint(architecture, model, optimizer, learning_rate, iteration, ch
         "optimizer": optimizer.state_dict(),
         "learning_rate": learning_rate,
     }
+
+    # for fp16 trainings
+    if gradscaler is not None:
+            checkpoint_data["gradscaler"] = gradscaler.state_dict()
 
     # Backwards compatibility for mainline, for "RVC" architecture
     if architecture == "RVC":
@@ -508,7 +513,7 @@ def old_session_cleanup(now_dir, model_name):
 def verify_remap_checkpoint(checkpoint_path, model, architecture):
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     checkpoint_state_dict = checkpoint["model"]
-    print(f"Verifying checkpoint for selected architecture: {architecture}")
+    print(f"[ ] Verifying checkpoint for selected architecture: {architecture}")
 
     strict_mode = True
 
@@ -519,26 +524,26 @@ def verify_remap_checkpoint(checkpoint_path, model, architecture):
             else:
                 model.load_state_dict(checkpoint_state_dict, strict=strict_mode)
         elif architecture != "RVC":
-            print("Non-RVC architecture pretrains detected. Checking for old keys...")
+            print("[ ] Non-RVC architecture pretrains detected. Checking for old keys...")
             
             # Check for old keys and remap them if found
             if any(key.endswith(".weight_v") for key in checkpoint_state_dict.keys()) and \
                any(key.endswith(".weight_g") for key in checkpoint_state_dict.keys()):
-                print("Old keys detected. Converting .weight_v and .weight_g to new format...")
+                print("[ ] Old keys detected. Converting .weight_v and .weight_g to new format...")
                 checkpoint_state_dict = replace_keys_in_dict(
                     checkpoint_state_dict,
                     ".weight_v",
                     ".parametrizations.weight.original1"
                 )
-                print("Remapping `.weight_v` keys completed.")
+                print("[ ] Remapping `.weight_v` keys completed.")
                 checkpoint_state_dict = replace_keys_in_dict(
                     checkpoint_state_dict,
                     ".weight_g",
                     ".parametrizations.weight.original0"
                 )
-                print("Remapping `.weight_g` keys completed.")
+                print("[ ] Remapping `.weight_g` keys completed.")
             else:
-                print("No old keys detected. Proceeding without remapping.")
+                print("[ ] No old keys detected. Proceeding without remapping.")
             
             # Load the state dictionary after remapping
             if hasattr(model, "module"):
@@ -570,7 +575,7 @@ def verify_remap_checkpoint(checkpoint_path, model, architecture):
     else:
         del checkpoint
         del checkpoint_state_dict
-        print("Checkpoint successfully verified and loaded.")
+        print("[ ] Checkpoint successfully verified and loaded.")
 
 
 def print_init_setup(

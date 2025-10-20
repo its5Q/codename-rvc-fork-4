@@ -11,7 +11,7 @@ import sys
 pid_data = {"process_pids": []}
 os.environ["USE_LIBUV"] = "0" if sys.platform == "win32" else "1"
 
-from typing import Tuple
+from typing import Tuple, Optional
 from collections import deque
 from distutils.util import strtobool
 from random import randint, shuffle
@@ -155,10 +155,23 @@ debug_shapes = False
 
 # EXPERIMENTAL
 c_stft = 21.0 # Seems close enough to multi-scale mel loss's magnitude, but needs more testing.
+#optimizer_choice = "AdamSPD"
+
 ##################################################################
 
 import logging
 logging.getLogger("torch").setLevel(logging.ERROR)
+
+
+def eval_infer(net_g, reference):
+    net_g.eval()
+    with torch.no_grad():
+        if hasattr(net_g, "module"):
+            o, *_ = net_g.module.infer(*reference)
+        else:
+            o, *_ = net_g.infer(*reference)
+    net_g.train()
+    return o
 
 class EpochRecorder:
     """
@@ -180,16 +193,6 @@ class EpochRecorder:
         current_time = datetime.datetime.now().strftime("%H:%M:%S")
 
         return f"Current time: {current_time} | Time per epoch: {elapsed_time_str}"
-
-def eval_infer(net_g, reference):
-    net_g.eval()
-    with torch.no_grad():
-        if hasattr(net_g, "module"):
-            o, *_ = net_g.module.infer(*reference)
-        else:
-            o, *_ = net_g.infer(*reference)
-    net_g.train()
-    return o
 
 def setup_env_and_distr(rank, n_gpus, device, device_id, config):
     if rank == 0:
@@ -333,14 +336,27 @@ def get_optimizers(
         lr=custom_lr_g if use_custom_lr else config.train.learning_rate,
         betas=(0.8, 0.99),
         eps=1e-9,
-        weight_decay=0,
+        weight_decay=0.0,
     )
     common_args_d = dict(
         lr=custom_lr_d if use_custom_lr else config.train.learning_rate,
         betas=(0.8, 0.99),
         eps=1e-9,
-        weight_decay=0,
+        weight_decay=0.0,
     )
+    adamwspd_args_g = dict(
+        lr=custom_lr_g if use_custom_lr else config.train.learning_rate,
+        betas=(0.8, 0.99),
+        eps=1e-9,
+        weight_decay=0.01,
+    )
+    adamwspd_args_d = dict(
+        lr=custom_lr_d if use_custom_lr else config.train.learning_rate,
+        betas=(0.8, 0.99),
+        eps=1e-9,
+        weight_decay=0.01,
+    )
+
     # For exotic optimizers
     ranger_args = dict(
         num_epochs=total_epoch_count,
@@ -371,9 +387,12 @@ def get_optimizers(
         optim_d = AdamW_BF16(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d, kahan_sum=True, foreach=True)
 
     elif optimizer_choice == "RAdam":
-        import torch_optimizer
-        optim_g = torch_optimizer.RAdam(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g)
-        optim_d = torch_optimizer.RAdam(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d)
+        optim_g = torch.optim.RAdam(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g)
+        optim_d = torch.optim.RAdam(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d)
+
+        # import torch_optimizer
+        # optim_g = torch_optimizer.RAdam(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g)
+        # optim_d = torch_optimizer.RAdam(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d)
 
     elif optimizer_choice == "DiffGrad":
         from rvc.train.custom_optimizers.diffgrad import diffgrad
@@ -389,6 +408,25 @@ def get_optimizers(
         from rvc.train.custom_optimizers.ranger21 import Ranger21
         optim_g = Ranger21(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g, **ranger_args)
         optim_d = Ranger21(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d, **ranger_args)
+
+    elif optimizer_choice == "AdamSPD":
+        import copy
+        from rvc.train.custom_optimizers.adamspd import AdamSPD
+
+        # Get trainable parameters and cache the pre-trained weights
+        params_to_opt_g = [p for p in net_g.parameters() if p.requires_grad]
+        params_anchor_g = copy.deepcopy(params_to_opt_g) 
+        # Parameter group with the anchor
+        param_group_g = [{'params': params_to_opt_g, 'pre': params_anchor_g}]
+
+        # Get trainable parameters and cache the pre-trained weights
+        params_to_opt_d = [p for p in net_d.parameters() if p.requires_grad]
+        params_anchor_d = copy.deepcopy(params_to_opt_d) 
+        # Parameter group with the anchor
+        param_group_d = [{'params': params_to_opt_d, 'pre': params_anchor_d}]
+
+        optim_g = AdamSPD(param_group_g, **adamwspd_args_g)
+        optim_d = AdamSPD(param_group_d, **adamwspd_args_d,)
     else:
         raise ValueError(f"Unknown optimizer choice: {optimizer_choice}")
     return optim_g, optim_d
@@ -396,6 +434,7 @@ def get_optimizers(
 def setup_models_for_training(net_g, net_d, device, device_id, n_gpus):
     net_g = net_g.to(device_id) if device.type == "cuda" else net_g.to(device)
     net_d = net_d.to(device_id) if device.type == "cuda" else net_d.to(device)
+
     if n_gpus > 1 and device.type == "cuda":
         net_g = DDP(net_g, device_ids=[device_id]) # find_unused_parameters=True)
         net_d = DDP(net_d, device_ids=[device_id]) # find_unused_parameters=True)
@@ -422,8 +461,8 @@ def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkp
             net_g, net_d = setup_models_for_training(net_g, net_d, device, device_id, n_gpus)
 
             # Load the model and optim states
-            _, _, _, epoch_str = load_checkpoint(architecture, g_checkpoint_path, net_g, optim_g)
-            _, _, _, epoch_str = load_checkpoint(architecture, d_checkpoint_path, net_d, optim_d)
+            _, _, _, epoch_str, gradscaler_dict = load_checkpoint(architecture, g_checkpoint_path, net_g, optim_g)
+            _, _, _, epoch_str, _ = load_checkpoint(architecture, d_checkpoint_path, net_d, optim_d)
 
             epoch_str += 1
             global_step = (epoch_str - 1) * len(train_loader)
@@ -435,16 +474,18 @@ def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkp
     # If no checkpoints are available, using the Pretrains directly
         epoch_str = 1
         global_step = 0
+        gradscaler_dict = {}
+        
         # Loading the pretrained Generator model
         if (pretrainG != "" and pretrainG != "None"):
             if rank == 0:
-                print(f"Loading pretrained (G) '{pretrainG}'")
+                print(f"[ ] Loading pretrained (G) '{pretrainG}'")
             verify_remap_checkpoint(pretrainG, net_g, architecture)
 
         # Loading the pretrained Discriminator model
         if pretrainD != "" and pretrainD != "None":
             if rank == 0:
-                print(f"Loading pretrained (D) '{pretrainD}'")
+                print(f"[ ] Loading pretrained (D) '{pretrainD}'")
             verify_remap_checkpoint(pretrainD, net_d, architecture)
 
         # Load the models and optionally wrap with DDP
@@ -453,7 +494,7 @@ def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkp
         # Init the optimizers
         optim_g, optim_d = get_optimizers(net_g, net_d, config, optimizer_choice, custom_lr_g, custom_lr_d, use_custom_lr, total_epoch_count, train_loader)
 
-    return net_g, net_d, optim_g, optim_d, epoch_str, global_step
+    return net_g, net_d, optim_g, optim_d, epoch_str, global_step, gradscaler_dict
 
 def prepare_schedulers(optim_g, optim_d, use_warmup, warmup_duration, use_lr_scheduler, lr_scheduler, exp_decay_gamma, total_epoch_count, epoch_str):
     warmup_scheduler_g, warmup_scheduler_d = None, None
@@ -689,7 +730,7 @@ def run(
         sys.exit(1)
 
     # Loading of models and optims
-    net_g, net_d, optim_g, optim_d, epoch_str, global_step = load_models_and_optimizers(
+    net_g, net_d, optim_g, optim_d, epoch_str, global_step, gradscaler_dict = load_models_and_optimizers(
         config,
         pretrainG,
         pretrainD,
@@ -733,6 +774,10 @@ def run(
 
     # GradScaler for FP16 training
     gradscaler = torch.amp.GradScaler(enabled=(device.type == "cuda" and train_dtype == torch.float16))
+    if len(gradscaler_dict) > 0:
+        gradscaler.load_state_dict(gradscaler_dict)
+        print(" ////////////////     Loading gradscaler state dict - FP16")
+
 
     # Reference sample for live-infer
     reference = get_reference_sample(train_loader, device, config)
@@ -1184,19 +1229,19 @@ def training_loop(
             "all/mel": plot_spectrogram_to_numpy(mel[0].detach().cpu().to(plot_dtype).numpy()),
         }
 
-
         # At each epoch save point:
         if epoch % epoch_save_frequency == 0:
-            if not benchmark_mode and use_validation:
-                # Running validation
-                validation_loop(
-                    net_g.module if hasattr(net_g, "module") else net_g,
-                    val_loader,
-                    device,
-                    config,
-                    writer,
-                    global_step,
-                )
+            if not benchmark_mode:
+                if use_validation:
+                # Run validation
+                    validation_loop(
+                        net_g.module if hasattr(net_g, "module") else net_g,
+                        val_loader,
+                        device,
+                        config,
+                        writer,
+                        global_step,
+                    )
             # Inferencing on reference sample
             o = eval_infer(net_g, reference)
             audio_dict = {f"gen/audio_{epoch}e_{global_step}s": o[0, :, :]} # Eval-infer samples
@@ -1237,6 +1282,7 @@ def training_loop(
                 config.train.learning_rate,
                 epoch,
                 os.path.join(experiment_dir, "G_" + checkpoint_suffix),
+                gradscaler,
             )
             # Save Discriminator checkpoint
             save_checkpoint(
@@ -1246,6 +1292,7 @@ def training_loop(
                 config.train.learning_rate,
                 epoch,
                 os.path.join(experiment_dir, "D_" + checkpoint_suffix),
+                gradscaler,
             )
             # Save small weight model
             if save_weight_models:
@@ -1294,7 +1341,6 @@ def training_loop(
 
         with torch.no_grad():
             torch.cuda.empty_cache()
-
 
 def validation_loop(net_g, val_loader, device, config, writer, global_step):
     net_g.eval()

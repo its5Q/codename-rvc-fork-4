@@ -3,10 +3,13 @@ from typing import Optional, List
 import random
 
 from rvc.lib.algorithm.commons import slice_segments, rand_slice_segments
-from rvc.lib.algorithm.normalizing_flows import ResidualCouplingBlock
-from rvc.lib.algorithm.encoders import TextEncoder, PosteriorEncoder
+from rvc.lib.algorithm.normalizing_flows import ResidualCouplingBlock, ResidualCouplingTransformersBlock
+from rvc.lib.algorithm.encoders import PosteriorEncoder, TextEncoder
+from rvc.lib.algorithm.encoders_vits2 import TextEncoder_VITS2 as TextEncoder
 
 debug_shapes = False
+use_vits2 = False # EXPERIMENTAL
+
 
 class Synthesizer(torch.nn.Module):
     def __init__(
@@ -56,17 +59,31 @@ class Synthesizer(torch.nn.Module):
         self.randomized = randomized
         self.vocoder = vocoder
 
-        self.enc_p = TextEncoder(
-            inter_channels,
-            hidden_channels,
-            filter_channels,
-            n_heads,
-            n_layers,
-            kernel_size,
-            p_dropout,
-            text_enc_hidden_dim,
-            f0=use_f0,
-        )
+        if use_vits2:
+            self.enc_p = TextEncoder(
+                inter_channels,
+                hidden_channels,
+                filter_channels,
+                n_heads,
+                n_layers,
+                kernel_size,
+                p_dropout,
+                text_enc_hidden_dim,
+                f0=use_f0,
+                gin_channels=gin_channels,
+            )
+        else:
+            self.enc_p = TextEncoder(
+                inter_channels,
+                hidden_channels,
+                filter_channels,
+                n_heads,
+                n_layers,
+                kernel_size,
+                p_dropout,
+                text_enc_hidden_dim,
+                f0=use_f0,
+            )
         if use_f0:
             if vocoder == "MRF HiFi-GAN":
                 from rvc.lib.algorithm.generators import HiFiGANMRFGenerator
@@ -181,14 +198,25 @@ class Synthesizer(torch.nn.Module):
             16,
             gin_channels=gin_channels,
         )
-        self.flow = ResidualCouplingBlock(
-            inter_channels,
-            hidden_channels,
-            5,
-            1,
-            3,
-            gin_channels=gin_channels,
-        )
+        if use_vits2:
+            self.flow = ResidualCouplingTransformersBlock(
+                inter_channels,
+                hidden_channels,
+                5,
+                1,
+                3,
+                gin_channels=gin_channels,
+            )
+        else:
+            self.flow = ResidualCouplingBlock(
+                inter_channels,
+                hidden_channels,
+                5,
+                1,
+                3,
+                gin_channels=gin_channels,
+            )
+
         self.emb_g = torch.nn.Embedding(spk_embed_dim, gin_channels)
 
     def _remove_weight_norm_from(self, module):
@@ -229,7 +257,11 @@ class Synthesizer(torch.nn.Module):
             ds (torch.Tensor, optional): Speaker embedding.
         """
         g = self.emb_g(ds).unsqueeze(-1)
-        m_p, logs_p, x_mask = self.enc_p(phone, pitch, phone_lengths)
+
+        if use_vits2:
+            m_p, logs_p, x_mask = self.enc_p(phone=phone, pitch=pitch, lengths=phone_lengths, g=g)
+        else:
+            m_p, logs_p, x_mask = self.enc_p(phone=phone, pitch=pitch, lengths=phone_lengths)
 
         if spec is not None:
             if debug_shapes:
@@ -267,7 +299,7 @@ class Synthesizer(torch.nn.Module):
 
                     return o, None, x_mask, spec_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
 
-            else: # For HiFi-Gan, MRF-HiFi-Gan and RefineGan training
+            else: # For HiFi-Gan, Snake HiFi-Gan, MRF-HiFi-Gan and RefineGan training
                 if self.randomized:
                     z_slice, ids_slice = rand_slice_segments(z, spec_lengths, self.segment_size)
 
@@ -313,7 +345,11 @@ class Synthesizer(torch.nn.Module):
             seed (int, optional): Seed for randomization of noise.
         """
         g = self.emb_g(sid).unsqueeze(-1)
-        m_p, logs_p, x_mask = self.enc_p(phone, pitch, phone_lengths)
+
+        if use_vits2:
+            m_p, logs_p, x_mask = self.enc_p(phone=phone, pitch=pitch, lengths=phone_lengths, g=g)
+        else:
+            m_p, logs_p, x_mask = self.enc_p(phone=phone, pitch=pitch, lengths=phone_lengths)
 
         if seed != 0:
             torch.manual_seed(seed)
