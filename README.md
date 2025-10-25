@@ -55,14 +55,14 @@
  
 - Hold-Out type validation mechanism during training. ( L1 MEL, mrSTFT, PESQ, SI-SDR )  ` In between epochs. `
  
-- BF16-AMP, TF32, FP32 Training modes available.  ` BF16 & TF32 require Ampere or newer GPUs. `<br/>
+- FP16-AMP, BF16-AMP, TF32, FP32 Training modes available.  ` BF16 & TF32 require Ampere or newer GPUs. `<br/>
 `BF16 and TF32 can be used simultaneously for extra speed gains.`
 > NOTE: BF16 is used by default ( and bf16-AdamW ). If unsupported hardware detected, switched back to FP32. Inference is only in FP32.
 
  
 - Support for 'Spin' embedder.
  
-- Ability to choose an optimizer.  ` ( Supported: AdamW, AdamW_BF16, RAdam, Ranger21, DiffGrad, Prodigy ) `
+- Ability to choose an optimizer.  ` ( Supported: AdamW, AdamW_BF16, RAdam, AdamSPD, Ranger21, DiffGrad, Prodigy ) `
  
 - (EXP) Double-update strategy for Discriminator.
  
@@ -72,14 +72,20 @@
  
 - Support for Multi-scale, classic L1 mel and (EXP) multi-resolution stft spectral losses.
  
-- Support for the following vocoders: HiFi-GAN, MRF-HiFi-gan, Refine-GAN, RingFormer.<br/>
-` RingFormer architecture consists of: RingFormer ( Conformer + RingAttention, snake activations ) + MPD, MSD, MRD Discs.`
+- Support for some of VITS2 enhancements.
+`( Transformer-enhanced normalizing flow + spk conditioned text encoder. )`
+ 
+- Support for the following vocoders: HiFi-GAN-NSF, MRF-HiFi-gan, Refine-GAN, RingFormer, Wavehax, Snake-HiFi-GAN-NSF.<br/>
+` RingFormer, Wavehax and Snake-HiFi-GAN-NSF architectures utilize MPD, MSD and MRD Discs combo.`
  
 - Checkpointing and various speed / memory optimizations compared to og RVC.
  
 - New logging mechanism for losses: Average loss per epoch logged as the standard loss, <br/>and rolling average loss over 50 steps to evaluate general trends and the model's performance over time.
  
 - From-ui quick tweaks; lr for g/d, schedulers, linear warmup, kl loss annealing and more ..
+
+**Any new / experimental features are always highlighted in releases so, feel free to check it out there.**
+  
  
  
  <br/>
