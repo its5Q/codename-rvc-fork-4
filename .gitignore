@@ -47,3 +47,4 @@ rvc/train/preprocess/preprocess - LUFS WITHOUT SAFETY.py
 EXTRAS/uvmp_extractor.py
 rvc/train/train_debug.py
 rvc/train/train - Copy fail bench.py
+rvc/train/train_optuna.py

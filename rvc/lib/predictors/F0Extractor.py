@@ -9,6 +9,7 @@ import os
 
 # from tools.anyf0.rmvpe import RMVPE
 from rvc.lib.predictors.RMVPE import RMVPE0Predictor
+from rvc.lib.predictors.FCPE import spawn_infer_model_from_pt as fcpe_f0_predictor
 from rvc.configs.config import Config
 
 config = Config()
@@ -57,7 +58,33 @@ class F0Extractor:
                 # hop_length=80
             )
             f0 = model_rmvpe.infer_from_audio(self.wav16k, thred=0.03)
+        elif method == "fcpe":
+            audio = librosa.to_mono(self.x)
+            audio_length = len(audio)
+            f0_target_length = (audio_length // self.hop_length) + 1
+            audio = (
+                torch.from_numpy(audio)
+                .float()
+                .unsqueeze(0)
+                .unsqueeze(-1)
+                .to(config.device)
+            )
+            model = spawn_infer_model_from_pt(
+                os.path.join("rvc", "models", "predictors", model_name),
+                self.device
+            )
 
+            f0 = model.fcpe_f0_predictor(
+                audio,
+                sr=self.sample_rate,
+                decoder_mode="local_argmax",
+                threshold=0.006,
+                f0_min=self.f0_min,
+                f0_max=self.f0_max,
+                interp_uv=False,
+                output_interp_target_length=f0_target_length,
+            )
+            f0 = f0.squeeze().cpu().numpy()
         else:
             raise ValueError(f"Unknown method: {self.method}")
         return self.hz_to_cents(f0, librosa.midi_to_hz(0))

@@ -548,6 +548,7 @@ class VoiceConverter:
             self.version = self.active_cpt.get("version", "v1")
             self.text_enc_hidden_dim = 768 if self.version == "v2" else 256
             self.vocoder = self.active_cpt.get("vocoder", "HiFi-GAN")
+            self.vits2_mode = self.active_cpt.get("vits2_mode", False)
 
             if debug_ringformer_config:
                 print("Config values:")
@@ -570,6 +571,7 @@ class VoiceConverter:
                     gen_istft_hop_size=self.gen_istft_hop_size,
                     text_enc_hidden_dim=self.text_enc_hidden_dim,
                     vocoder=self.vocoder,
+                    vits2_mode=self.vits2_mode,
                 )
             else:
                 self.net_g = Synthesizer(
@@ -577,6 +579,7 @@ class VoiceConverter:
                     use_f0=self.use_f0,
                     text_enc_hidden_dim=self.text_enc_hidden_dim,
                     vocoder=self.vocoder,
+                    vits2_mode=self.vits2_mode,
                 )
 
             del self.net_g.enc_q

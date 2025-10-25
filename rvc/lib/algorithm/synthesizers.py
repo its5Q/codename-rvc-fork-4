@@ -8,7 +8,6 @@ from rvc.lib.algorithm.encoders import PosteriorEncoder, TextEncoder
 from rvc.lib.algorithm.encoders_vits2 import TextEncoder_VITS2 as TextEncoder
 
 debug_shapes = False
-use_vits2 = False # EXPERIMENTAL
 
 
 class Synthesizer(torch.nn.Module):
@@ -35,8 +34,9 @@ class Synthesizer(torch.nn.Module):
         use_f0: bool,
         text_enc_hidden_dim: int = 768,
         vocoder: str = "HiFi-GAN",
-        randomized: bool = True,
         checkpointing: bool = False,
+        randomized: bool = True,
+        vits2_mode: bool = False,
         gen_istft_n_fft: int = 120,
         gen_istft_hop_size: int = 30,
         convnext_channels: int = 32,
@@ -56,10 +56,11 @@ class Synthesizer(torch.nn.Module):
         self.gen_istft_hop_size = gen_istft_hop_size
         self.segment_size = segment_size
         self.use_f0 = use_f0
-        self.randomized = randomized
         self.vocoder = vocoder
+        self.randomized = randomized
+        self.vits2_mode = vits2_mode
 
-        if use_vits2:
+        if vits2_mode:
             self.enc_p = TextEncoder(
                 inter_channels,
                 hidden_channels,
@@ -198,7 +199,7 @@ class Synthesizer(torch.nn.Module):
             16,
             gin_channels=gin_channels,
         )
-        if use_vits2:
+        if vits2_mode:
             self.flow = ResidualCouplingTransformersBlock(
                 inter_channels,
                 hidden_channels,
@@ -258,7 +259,8 @@ class Synthesizer(torch.nn.Module):
         """
         g = self.emb_g(ds).unsqueeze(-1)
 
-        if use_vits2:
+        if self.vits2_mode:
+            print("VITS2 MODE FOUND IN FORWARDDDDD")
             m_p, logs_p, x_mask = self.enc_p(phone=phone, pitch=pitch, lengths=phone_lengths, g=g)
         else:
             m_p, logs_p, x_mask = self.enc_p(phone=phone, pitch=pitch, lengths=phone_lengths)
@@ -346,7 +348,8 @@ class Synthesizer(torch.nn.Module):
         """
         g = self.emb_g(sid).unsqueeze(-1)
 
-        if use_vits2:
+        if self.vits2_mode:
+            print("VITS2 MODE FOUND IN INFERENCEEEEE")
             m_p, logs_p, x_mask = self.enc_p(phone=phone, pitch=pitch, lengths=phone_lengths, g=g)
         else:
             m_p, logs_p, x_mask = self.enc_p(phone=phone, pitch=pitch, lengths=phone_lengths)

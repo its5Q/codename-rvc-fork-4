@@ -36,6 +36,7 @@ def extract_model(
     architecture,
     pitch_guidance=True,
     version="v2",
+    vits2_mode=False,
 ):
     try:
         model_dir = os.path.dirname(model_path)
@@ -108,7 +109,7 @@ def extract_model(
         opt["speakers_id"] = speakers_id
         opt["vocoder"] = vocoder
         opt["vocoder_architecture"] = vocoder_architecture
-
+        opt["vits2_mode"] = vits2_mode
         if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
             opt["ringformer_istft"] = [
                 hps.model.gen_istft_n_fft,

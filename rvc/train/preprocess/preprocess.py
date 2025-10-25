@@ -267,6 +267,39 @@ def _process_and_save_worker(args):
         logger.error(f"Error normalizing {file_name}: {e}")
         raise e
 
+def _process_and_save_classic_worker(args):
+    file_name, gt_wavs_dir, wavs16k_dir = args
+    try:
+        # Process ground truth audio
+        gt_path = os.path.join(gt_wavs_dir, file_name)
+        gt_audio, gt_sr = sf.read(gt_path)
+
+        # Simple peak normalization to 0.95
+        peak_amp = np.max(np.abs(gt_audio))
+        if peak_amp > 0:
+            gt_normalized = (gt_audio / peak_amp) * 0.95
+        else:
+            gt_normalized = gt_audio
+
+        wavfile.write(gt_path, gt_sr, gt_normalized.astype(np.float32))
+
+        # Process 16k audio
+        k16_path = os.path.join(wavs16k_dir, file_name)
+        k16_audio, k16_sr = sf.read(k16_path)
+
+        # Peak norm to 0.95
+        peak_amp_16k = np.max(np.abs(k16_audio))
+        if peak_amp_16k > 0:
+            k16_normalized = (k16_audio / peak_amp_16k) * 0.95
+        else:
+            k16_normalized = k16_audio
+
+        wavfile.write(k16_path, k16_sr, k16_normalized.astype(np.float32))
+
+    except Exception as e:
+        logger.error(f"Error classic normalizing {file_name}: {e}")
+        raise e
+
 def _measure_lufs_and_peak_worker(file_path):
     try:
         audio, sr = sf.read(file_path)
@@ -311,20 +344,15 @@ def normalize_sliced_audio(
             logger.error("No valid audio levels could be measured. Aborting normalization.")
             return
 
-        # New, corrected logic to find the safest LUFS target
-        safety_margin_db = -1.0  # Target peak for the loudest possible segment
+        safety_margin_db = -1.0
         potential_safe_targets = []
         for lufs, peak in valid_loudness_and_peaks:
-            # Calculate gain needed to bring this chunk's peak to the safety margin
             gain_to_safe_peak = safety_margin_db - peak
-            # Calculate what the LUFS of this chunk would be with that gain
             potential_target_lufs = lufs + gain_to_safe_peak
             potential_safe_targets.append(potential_target_lufs)
 
-        # The safest target for the whole dataset is the minimum of these potential targets
+
         safe_lufs_target = min(potential_safe_targets)
-        
-        # The final target is the lesser of the user's desired target and our calculated safe target
         final_lufs_target = safe_lufs_target
         
         loudest_lufs_original = max(r[0] for r in valid_loudness_and_peaks)
@@ -412,7 +440,6 @@ def preprocess_training_set(
                 f'Speaker ID folder is expected to be integer, got "{os.path.basename(root)}" instead.'
             )
 
-    # Phase 1: Slicing and Resampling (no normalization)
     cleanup_dirs(exp_dir)
 
     arg_list = [
@@ -450,10 +477,8 @@ def preprocess_training_set(
         cleanup_dirs(exp_dir)
         return
 
-    # Add this conditional logic here
-    if normalization_mode == "post":
+    if normalization_mode == "post_lufs":
         logger.info("Loudness Normalization enabled. Initiating...")
-        # Phase 2: LUFS Normalization
         try:
             normalize_sliced_audio(
                 exp_dir,
@@ -465,8 +490,25 @@ def preprocess_training_set(
             logger.error(f"Normalization failed: {e}. Aborting.")
             cleanup_dirs(exp_dir)
             return
+
+    elif normalization_mode == "post_peak":
+        logger.info("Classic Peak Normalization enabled. Initiating...")
+        gt_wavs_dir = os.path.join(exp_dir, "sliced_audios")
+        wavs16k_dir = os.path.join(exp_dir, "sliced_audios_16k")
+        audio_files = [f for f in os.listdir(gt_wavs_dir) if f.endswith(".wav")]
+        audio_files.sort()
+
+        arg_list = [(file_name, gt_wavs_dir, wavs16k_dir) for file_name in audio_files]
+
+        try:
+            with multiprocessing.Pool(processes=num_processes) as pool:
+                list(tqdm(pool.imap_unordered(_process_and_save_classic_worker, arg_list), total=len(audio_files), desc="Peak Normalization"))
+        except Exception as e:
+            logger.error(f"Peak Normalization failed: {e}. Aborting.")
+            cleanup_dirs(exp_dir)
+            return
     else:
-        logger.info("Loudness Normalization disabled. Skipping normalization phase.")
+        logger.info("Normalization disabled. Skipping normalization phase.")
 
     elapsed_time = time.time() - start_time
     logger.info(f"Preprocessing completed in {elapsed_time:.2f} seconds "

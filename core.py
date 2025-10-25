@@ -433,7 +433,7 @@ def run_preprocess_script(
     clean_strength: float,
     chunk_len: float,
     overlap_len: float,
-    normalization_mode: str = "post",
+    normalization_mode: str = "post_lufs",
     loading_resampling: str = "librosa",
     target_lufs: float = -20,
     lufs_range_finder: bool = True,
@@ -533,11 +533,12 @@ def run_train_script(
     use_benchmark: bool = True,
     use_deterministic: bool = False,
     spectral_loss: str = "L1 Mel Loss",
-    lr_scheduler: str = "exp decay",
+    lr_scheduler: str = "exp decay step",
     exp_decay_gamma: str = "0.999875",
     use_validation: bool = True,
     use_kl_annealing: bool = False,
     kl_annealing_cycle_duration: int = 3,
+    vits2_mode: bool = False,
     use_custom_lr: bool = False,
     custom_lr_g: float = 1e-4,
     custom_lr_d: float = 1e-4,
@@ -595,6 +596,7 @@ def run_train_script(
                 use_validation,
                 use_kl_annealing,
                 kl_annealing_cycle_duration,
+                vits2_mode,
                 use_custom_lr,
                 custom_lr_g,
                 custom_lr_d
@@ -786,6 +788,7 @@ def parse_arguments():
             "crepe",
             "crepe-tiny",
             "rmvpe",
+            "fcpe",
         ],
         default="rmvpe",
     )
@@ -1302,6 +1305,7 @@ def parse_arguments():
             "crepe",
             "crepe-tiny",
             "rmvpe",
+            "fcpe",
         ],
         default="rmvpe",
     )
@@ -1779,6 +1783,7 @@ def parse_arguments():
             "crepe",
             "crepe-tiny",
             "rmvpe",
+            "fcpe",
         ],
         default="rmvpe",
     )
@@ -1945,8 +1950,8 @@ def parse_arguments():
         "--normalization_mode",
         type=str,
         help="Normalization mode.",
-        choices=["none", "post"],
-        default="post",
+        choices=["none", "post_lufs", "post_peak"],
+        default="post_lufs",
         required=False,
     )
     preprocess_parser.add_argument(
@@ -1987,6 +1992,7 @@ def parse_arguments():
             "crepe",
             "crepe-tiny",
             "rmvpe",
+            "fcpe",
         ],
         default="rmvpe",
     )
@@ -2076,7 +2082,7 @@ def parse_arguments():
         "--optimizer",
         type=str,
         help="Choose an optimizer used in training.",
-        choices=["AdamW BF16", "AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"],
+        choices=["AdamW BF16", "AdamW", "AdamSPD", "RAdam", "Ranger21", "DiffGrad", "Prodigy"],
         default="AdamW",
     )
     train_parser.add_argument(
@@ -2223,15 +2229,15 @@ def parse_arguments():
     train_parser.add_argument(
         "--lr_scheduler",
         type=str,
-        choices=["exp decay", "cosine annealing", "none"],
-        help="Available schedulers: exp decay, cosine annealing, none ",
+        choices=["exp decay step", "exp decay epoch", "cosine annealing", "none"],
+        help="Available schedulers: exp decay step, exp decay epoch, cosine annealing, none ",
         default="exp decay",
         required=False,
     )
     train_parser.add_argument(
         "--exp_decay_gamma",
         type=str,
-        choices=["0.999875", "0.999", "0.9975", "0.995"],
+        choices=["0.9999996", "0.999875", "0.999", "0.9975", "0.995"],
         help="Pick the gamma for exponential lr decay scheduler",
         default="0.999875",
     )
@@ -2255,6 +2261,13 @@ def parse_arguments():
         type=int,
         help="Duration of kl annealing phase (in epochs).",
         default=3,
+    )
+    train_parser.add_argument(
+        "--vits2_mode",
+        type=lambda x: bool(strtobool(x)),
+        choices=[True, False],
+        help="Whether to use VITS2 enhancements or not.",
+        default=False,
     )
     train_parser.add_argument(
         "--use_custom_lr",
@@ -2570,6 +2583,7 @@ def main():
                 gpu=args.gpu,
                 sample_rate=args.sample_rate,
                 vocoder_arch=args.vocoder_arch,
+                vits2_mode=args.vits2_mode,
                 embedder_model=args.embedder_model,
                 embedder_model_custom=args.embedder_model_custom,
                 include_mutes=args.include_mutes,

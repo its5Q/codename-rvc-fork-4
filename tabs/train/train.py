@@ -273,13 +273,13 @@ fp16_check = None
 if microarchitecture_capability_checker():
     # Ampere-Microarchitecture and higher viable:
     initial_optimizer = "AdamW BF16"
-    initial_optimizer_choices = ["AdamW BF16", "AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
+    initial_optimizer_choices = ["AdamW BF16", "AdamW", "RAdam", "AdamSPD", "Ranger21", "DiffGrad", "Prodigy"]
     architecture_choices = ["RVC", "Fork/Applio", "Fork"]
     fp16_check = True
 else:
     # Below Ampere-Microarchitecture viable:
     initial_optimizer = "AdamW"
-    initial_optimizer_choices = ["AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
+    initial_optimizer_choices = ["AdamW", "RAdam", "AdamSPD", "Ranger21", "DiffGrad", "Prodigy"]
     architecture_choices = ["RVC", "Fork/Applio",  "Wavehax"]
     fp16_check = True
 
@@ -287,7 +287,7 @@ else:
 if fp16_check:
     if check_if_fp16():
         initial_optimizer = "AdamW"
-        initial_optimizer_choices = ["AdamW", "RAdam", "Ranger21", "DiffGrad", "Prodigy"]
+        initial_optimizer_choices = ["AdamW", "RAdam", "AdamSPD", "Ranger21", "DiffGrad", "Prodigy"]
 
 
 # Train Tab
@@ -330,10 +330,16 @@ def train_tab():
                     visible=True,
                     key='architecture'
                 )
+                vits2_mode = gr.Checkbox(
+                    label="Enables VITS2 mode",
+                    value=False,
+                    interactive=True,
+                    visible=True,
+                )
                 vocoder_arch = gr.State("hifi_mrf_refine")
                 optimizer = gr.Radio(
                     label="Optimizer",
-                    info="Choose an optimizer used in training: \n ( If unsure, just leave it as it is. ) \n- **AdamW BF16:** Good and reliable. ( BF16 ver. )  \n- **AdamW:** Normal AdamW. ( **Use the BF16 version unless you train in FP32-only or FP16** ) \n- **RAdam:** Rectified Adam. ( **Can help** with early instability - **Most likely slower convergence** ) \n- **Ranger21:** AdamW + LookAhead and few more extras. ( **Most likely unstable** ) \n- **DiffGrad:** An optimizer with CNN in mind. ( **Probs** a good AdamW alternative - **For finetuning** ) \n- **Prodigy:** A self-tuning optimizer. Lr will adapt automatically ( **Don't touch the lr** )",
+                    info="Choose an optimizer used in training: \n ( If unsure, just leave it as it is or try these in this order: AdamW -> AdamSPD -> RAdam. ) \n- **AdamW BF16:** Good and reliable. ( BF16 ver. )  \n- **AdamW:** Normal AdamW. ( **Use the BF16 version unless you train in FP32-only or FP16** ) \n- **RAdam:** Rectified Adam. ( **Can help** with early instability - **Most likely slower convergence** ) \n- **AdamSPD:** Adam with SPD. ( SPD: New weight-decay technique **tailored for fine-tuning.** ) \n- **Ranger21:** AdamW + LookAhead and few more extras. ( **Most likely unstable** ) \n- **DiffGrad:** An optimizer with CNN in mind. ( **Probs** a good AdamW alternative - **For finetuning** ) \n- **Prodigy:** A self-tuning optimizer. Lr will adapt automatically ( **Don't touch the lr** )",
                     choices=initial_optimizer_choices,
                     value=initial_optimizer,
                     interactive=True,
@@ -452,9 +458,9 @@ def train_tab():
                 )
                 normalization_mode = gr.Radio(
                     label="Loudness Normalization",
-                    info="- **none:** Disabled \n ( Select this if the files are already normalized. ) \n- **post:** Post-Normalization \n ( Loudness norm. of each sliced segment. ) \n ",
-                    choices=["none", "post"],
-                    value="post",
+                    info="- **none:** Disabled \n ( Select this if the files are already normalized. ) \n- **post_lufs:** PyLoud Post-Normalization \n ( Loudness norm. of each sliced segment. ) \n- **post_peak:** Peak Post-Normalization \n ( Peak [ 0.95] norm of each sliced segment. ) \n ",
+                    choices=["none", "post_lufs", "post_peak"],
+                    value="post_lufs",
                     interactive=True,
                     visible=True,
                     key='normalization_mode'
@@ -572,7 +578,7 @@ def train_tab():
             f0_method = gr.Radio(
                 label="Pitch extraction algorithm",
                 info="Pitch extraction algorithm to use for the audio conversion: \n\n**RMVPE:** The default algorithm, recommended for most cases. \n- The fastest, very robust to noise. Can tolerate harmonies / layered vocals to some degree.  \n\n**CREPE:** Better suited for truly clean audio. \n- Is slower and way worse in handling noise. Can provide different / softer-ish results. \n\n**CREPE-TINY:** Smaller / lighter variant of CREPE. \n- Performs worse than 'full' ( standard crepe ) but is way lighter on hardware.",
-                choices=["crepe", "crepe-tiny", "rmvpe"],
+                choices=["crepe", "crepe-tiny", "rmvpe", "fcpe"],
                 value="rmvpe",
                 interactive=True,
                 key='f0_method'
@@ -659,7 +665,7 @@ def train_tab():
                 max_vram_gpu(0),
                 step=1,
                 label="Batch Size",
-                info="[ TOO BIG BATCH SIZE CAN LEAD TO VRAM 'OOM' ISSUES. ]\n\n Bigger batch size: \n- Promotes smoother, more stable gradients. \n- Can beneficial in cases where your dataset is big and diverse. \n- Can lead to early overtraining or flat / ' stuck ' graphs. \n- Generalization might be worsened. \n\n Smaller batch size: \n- Promotes noisier, less stable gradients. \n- More suitable when your dataset is small, less diverse or repetitive. \n- Can lead to instability / divergence or noisy as hell graphs. \n- Generalization might be improved.",
+                info="[ TOO BIG BATCH SIZE CAN LEAD TO VRAM 'OOM' ISSUES. ]\n\n Bigger batch size: \n- Promotes smoother, more stable gradients. \n- Can beneficial in cases where your dataset is big and diverse. \n- Can lead to early overtraining or flat / ' stuck ' graphs. \n- Generalization might be worsened. \n- **Favors slower learning rate.** \n\n Smaller batch size: \n- Promotes noisier, less stable gradients. \n- More suitable when your dataset is small, less diverse or repetitive. \n- Can lead to instability / divergence or noisy as hell graphs. \n- Generalization might be improved. \n- **Favors faster learning rate.**",
                 interactive=True,
                 key='batch_size'
             )
@@ -767,16 +773,16 @@ def train_tab():
                     )
                     lr_scheduler = gr.Radio(
                         label="Learning rate scheduler",
-                        info="- **exp decay:** Decays the lr exponentially - **Safe default.** \n- **cosine annealing:** Cosine annealing schedule - **Optional alternative.** \n- **none:** No scheduler - **For debugging or developing.**",
-                        choices=["exp decay", "cosine annealing", "none"],
-                        value="exp decay",
+                        info="- **exp decay:** Decays the lr exponentially - **Safe default.** \n **( 'step' variant decays per step, 'epoch' per epoch. For finetuning per-step is recommended. )** \n- **cosine annealing:** Cosine annealing schedule - **Optional alternative.** \n- **none:** No scheduler - **For debugging or developing.**",
+                        choices=["exp decay step", "exp decay epoch", "cosine annealing", "none"],
+                        value="exp decay step",
                         interactive=True,
                         key='lr_scheduler'
                     )
                     exp_decay_gamma = gr.Radio(
                         label="Exponential decay gamma",
                         info="Gamma / decay factor for exponential lr scheduler",
-                        choices=["0.999875", "0.999", "0.9975", "0.995"],
+                        choices=["0.9999996", "0.999875", "0.999", "0.9975", "0.995"],
                         value="0.999875",
                         interactive=True,
                         visible=True,
@@ -967,9 +973,10 @@ def train_tab():
                     use_validation,
                     use_kl_annealing,
                     kl_annealing_cycle_duration,
+                    vits2_mode,
                     use_custom_lr,
                     custom_lr_g,
-                    custom_lr_d
+                    custom_lr_d,
                 ],
                 outputs=[train_output_info],
             )
@@ -1040,7 +1047,7 @@ def train_tab():
                 return {"visible": checkbox, "__type__": "update"}
 
             def toggle_visible_gamma(lr_scheduler):
-                if lr_scheduler == "exp decay":
+                if lr_scheduler in ["exp decay step", "exp decay epoch"]:
                     return {"visible": True, "__type__": "update"}
                 return {"visible": False, "__type__": "update"}
 

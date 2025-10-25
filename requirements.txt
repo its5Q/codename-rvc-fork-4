@@ -37,6 +37,7 @@ peft==0.17.1
 matplotlib==3.7.2
 tensorboard
 gradio==5.23.1
+local_attention==1.11.2
 
 # Miscellaneous utilities
 tensorboardX

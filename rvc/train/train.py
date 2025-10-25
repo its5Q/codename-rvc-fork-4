@@ -66,6 +66,7 @@ from losses import (
     generator_loss,
     feature_loss,
     kl_loss,
+    kl_loss_clamped,
     phase_loss,
 )
 from mel_processing import (
@@ -106,8 +107,9 @@ exp_decay_gamma = float(sys.argv[24])
 use_validation = strtobool(sys.argv[25])
 use_kl_annealing = strtobool(sys.argv[26])
 kl_annealing_cycle_duration = int(sys.argv[27])
-use_custom_lr = strtobool(sys.argv[28])
-custom_lr_g, custom_lr_d = (float(sys.argv[29]), float(sys.argv[30])) if use_custom_lr else (None, None)
+vits2_mode = strtobool(sys.argv[28])
+use_custom_lr = strtobool(sys.argv[29])
+custom_lr_g, custom_lr_d = (float(sys.argv[30]), float(sys.argv[31])) if use_custom_lr else (None, None)
 assert not use_custom_lr or (custom_lr_g and custom_lr_d), "Invalid custom LR values."
 
 # Parse command line arguments end region ===========================
@@ -155,8 +157,6 @@ debug_shapes = False
 
 # EXPERIMENTAL
 c_stft = 21.0 # Seems close enough to multi-scale mel loss's magnitude, but needs more testing.
-#optimizer_choice = "AdamSPD"
-
 ##################################################################
 
 import logging
@@ -287,6 +287,7 @@ def get_g_model(config, sample_rate, vocoder, use_checkpointing, randomized):
         vocoder = vocoder,
         checkpointing = use_checkpointing,
         randomized = randomized,
+        vits2_mode = vits2_mode,
     )
 
 def get_d_model(config, vocoder, use_checkpointing):
@@ -348,13 +349,13 @@ def get_optimizers(
         lr=custom_lr_g if use_custom_lr else config.train.learning_rate,
         betas=(0.8, 0.99),
         eps=1e-9,
-        weight_decay=0.01,
+        weight_decay=0.001,
     )
     adamwspd_args_d = dict(
         lr=custom_lr_d if use_custom_lr else config.train.learning_rate,
         betas=(0.8, 0.99),
         eps=1e-9,
-        weight_decay=0.01,
+        weight_decay=0.001,
     )
 
     # For exotic optimizers
@@ -389,10 +390,6 @@ def get_optimizers(
     elif optimizer_choice == "RAdam":
         optim_g = torch.optim.RAdam(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g)
         optim_d = torch.optim.RAdam(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d)
-
-        # import torch_optimizer
-        # optim_g = torch_optimizer.RAdam(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g)
-        # optim_d = torch_optimizer.RAdam(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d)
 
     elif optimizer_choice == "DiffGrad":
         from rvc.train.custom_optimizers.diffgrad import diffgrad
@@ -496,9 +493,11 @@ def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkp
 
     return net_g, net_d, optim_g, optim_d, epoch_str, global_step, gradscaler_dict
 
-def prepare_schedulers(optim_g, optim_d, use_warmup, warmup_duration, use_lr_scheduler, lr_scheduler, exp_decay_gamma, total_epoch_count, epoch_str):
+def prepare_schedulers(optim_g, optim_d, use_warmup, warmup_duration, use_lr_scheduler, lr_scheduler, exp_decay_gamma, total_epoch_count, epoch_str, global_step, train_loader):
     warmup_scheduler_g, warmup_scheduler_d = None, None
     scheduler_g, scheduler_d = None, None
+
+    num_batches_per_epoch = len(train_loader)
 
     if use_warmup:
         warmup_scheduler_g = torch.optim.lr_scheduler.LambdaLR(
@@ -517,13 +516,23 @@ def prepare_schedulers(optim_g, optim_d, use_warmup, warmup_duration, use_lr_sch
                 param_group['initial_lr'] = param_group['lr']
 
     if use_lr_scheduler:
-        if lr_scheduler == "exp decay":
-            # Exponential decay lr scheduler
-            scheduler_g = torch.optim.lr_scheduler.ExponentialLR( optim_g, gamma=exp_decay_gamma, last_epoch=epoch_str - 1 )
-            scheduler_d = torch.optim.lr_scheduler.ExponentialLR( optim_d, gamma=exp_decay_gamma, last_epoch=epoch_str - 1 )
-        elif lr_scheduler == "cosine annealing":
-            scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR( optim_g, T_max=total_epoch_count, eta_min=3e-5, last_epoch=epoch_str - 1 )
-            scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR( optim_d, T_max=total_epoch_count, eta_min=3e-5, last_epoch=epoch_str - 1 )
+        if lr_scheduler == "exp decay step":
+            exp_decay_gamma_step = exp_decay_gamma ** (1.0 / num_batches_per_epoch)
+
+        if lr_scheduler == "exp decay epoch":
+            # Exponential decay lr scheduler per epoch
+            scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=exp_decay_gamma, last_epoch=epoch_str - 1)
+            scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=exp_decay_gamma, last_epoch=epoch_str - 1)
+
+        elif lr_scheduler == "exp decay step":
+            # Exponential decay lr scheduler per step
+            scheduler_g = torch.optim.lr_scheduler.LambdaLR(optim_g, lr_lambda=lambda step: exp_decay_gamma_step ** step, last_epoch=global_step - 1)
+            scheduler_d = torch.optim.lr_scheduler.LambdaLR(optim_d, lr_lambda=lambda step: exp_decay_gamma_step ** step, last_epoch=global_step - 1)
+
+        elif lr_scheduler == "cosine annealing epoch":
+            # Cosine annealing lr scheduler per epoch
+            scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optim_g, T_max=total_epoch_count, eta_min=3e-5, last_epoch=epoch_str - 1)
+            scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optim_d, T_max=total_epoch_count, eta_min=3e-5, last_epoch=epoch_str - 1)
 
     return warmup_scheduler_g, warmup_scheduler_d, scheduler_g, scheduler_d
 
@@ -766,7 +775,9 @@ def run(
         lr_scheduler,
         exp_decay_gamma,
         total_epoch_count,
-        epoch_str
+        epoch_str,
+        global_step,
+        train_loader
     )
 
     # Hann window for stft ( for RingFormer only. )
@@ -776,7 +787,7 @@ def run(
     gradscaler = torch.amp.GradScaler(enabled=(device.type == "cuda" and train_dtype == torch.float16))
     if len(gradscaler_dict) > 0:
         gradscaler.load_state_dict(gradscaler_dict)
-        print(" ////////////////     Loading gradscaler state dict - FP16")
+        print("    ██████  Loading gradscaler state dict - FP16")
 
 
     # Reference sample for live-infer
@@ -792,6 +803,7 @@ def run(
             config,
             [net_g, net_d],
             [optim_g, optim_d],
+            [scheduler_g, scheduler_d],
             train_loader,
             val_loader if use_validation else None,
             [writer_eval],
@@ -822,15 +834,16 @@ def run(
                 print(f"    ██████  LR G: {optim_g.param_groups[0]['lr']}")
                 print(f"    ██████  LR D: {optim_d.param_groups[0]['lr']}")
                 # scheduler:
-                if lr_scheduler == "exp decay":
-                    print(f"    ██████  Starting the exponential lr decay with gamma of {exp_decay_gamma}")
-                elif lr_scheduler == "cosine annealing":
-                    print("    ██████  Starting cosine annealing scheduler " )
+                if lr_scheduler == "exp decay epoch":
+                    print(f"    ██████  Starting the per-epoch exponential lr decay with gamma of {exp_decay_gamma}")
+                elif lr_scheduler == "cosine annealing epoch":
+                    print("    ██████  Starting per-epoch cosine annealing scheduler " )
 
         if use_lr_scheduler and (not use_warmup or warmup_completed):
             # Once the warmup phase is completed, uses exponential lr decay
-            scheduler_g.step()
-            scheduler_d.step()
+            if lr_scheduler in ["exp decay epoch", "cosine annealing epoch"]:
+                scheduler_g.step()
+                scheduler_d.step()
 
 def training_loop(
     rank,
@@ -838,6 +851,7 @@ def training_loop(
     config,
     nets,
     optims,
+    schedulers,
     train_loader,
     val_loader,
     writers,
@@ -877,10 +891,11 @@ def training_loop(
         gradscaler: gradscaler for fp16
         hann_window: hann window used for RingFormer
     """
-    global global_step, warmup_completed
+    global global_step, warmup_completed, use_lr_scheduler, lr_scheduler, use_warmup
 
     net_g, net_d = nets
     optim_g, optim_d = optims
+    scheduler_g, scheduler_d = schedulers if schedulers is not None else (None, None)
 
     train_loader = train_loader if train_loader is not None else None
     if not benchmark_mode and use_validation:
@@ -995,6 +1010,7 @@ def training_loop(
             if train_dtype == torch.float16:
                 gradscaler.scale(loss_disc).backward() # Scale and backward of the loss
                 gradscaler.unscale_(optim_d) # Unscale
+                scale = gradscaler.get_scale() # To retrieve current gradscaler's scaling
                 grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=999999) # Grad clipping
                 grad_norm_d_clipped = commons.get_total_norm([p.grad for p in net_d.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=False) # Grad retrieval for logging
                 gradscaler.step(optim_d) # Optim step
@@ -1034,7 +1050,7 @@ def training_loop(
                 else:
                     kl_beta = 1.0
 
-                loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * config.train.c_kl
+                loss_kl = kl_loss_clamped(z_p, logs_q, m_p, logs_p, z_mask) * config.train.c_kl
 
                 if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                     # RingFormer related;  Phase, Magnitude and SD:
@@ -1063,6 +1079,13 @@ def training_loop(
                 grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=999999) # Grad clipping
                 grad_norm_g_clipped = commons.get_total_norm([p.grad for p in net_g.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=True) # Grad retrieval for logging
                 optim_g.step() # Optim step
+
+            # Per step exp lr decay for generator
+            skip_lr_sched = (scale > gradscaler.get_scale())
+            if not skip_lr_sched: # We skip lr scheduler step if there were nans / infs due to gradscaler's scaling.
+                if use_lr_scheduler and (not use_warmup or warmup_completed) and lr_scheduler == "exp decay step":
+                    scheduler_d.step()
+                    scheduler_g.step()
 
             if not from_scratch:
                 # Loss accumulation In the epoch_loss_tensor
@@ -1115,17 +1138,17 @@ def training_loop(
                     / len(avg_50_cache["grad_norm_g_clipped_50"]),
                     # Losses:
                     "loss_avg_50/loss_disc_50": torch.mean(
-                        torch.stack(list(avg_50_cache["loss_disc_50"]))),
+                        torch.stack(list(avg_50_cache["loss_disc_50"]))).item(),
                     "loss_avg_50/loss_adv_50": torch.mean(
-                        torch.stack(list(avg_50_cache["loss_adv_50"]))),
+                        torch.stack(list(avg_50_cache["loss_adv_50"]))).item(),
                     "loss_avg_50/loss_gen_total_50": torch.mean(
-                        torch.stack(list(avg_50_cache["loss_gen_total_50"]))),
+                        torch.stack(list(avg_50_cache["loss_gen_total_50"]))).item(),
                     "loss_avg_50/loss_fm_50": torch.mean(
-                        torch.stack(list(avg_50_cache["loss_fm_50"]))),
+                        torch.stack(list(avg_50_cache["loss_fm_50"]))).item(),
                     "loss_avg_50/loss_mel_50": torch.mean(
-                        torch.stack(list(avg_50_cache["loss_mel_50"]))),
+                        torch.stack(list(avg_50_cache["loss_mel_50"]))).item(),
                     "loss_avg_50/loss_kl_50": torch.mean(
-                        torch.stack(list(avg_50_cache["loss_kl_50"]))),
+                        torch.stack(list(avg_50_cache["loss_kl_50"]))).item(),
                 })
                 if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                     scalar_dict_50.update({
@@ -1191,12 +1214,12 @@ def training_loop(
             avg_epoch_loss = epoch_loss_tensor / num_batches_in_epoch
 
             scalar_dict_avg = {
-            "loss_avg/loss_disc": avg_epoch_loss[0],
-            "loss_avg/loss_adv": avg_epoch_loss[1],
-            "loss_avg/loss_gen_total": avg_epoch_loss[2],
-            "loss_avg/loss_fm": avg_epoch_loss[3],
-            "loss_avg/loss_mel": avg_epoch_loss[4],
-            "loss_avg/loss_kl": avg_epoch_loss[5],
+            "loss_avg/loss_disc": avg_epoch_loss[0].item(),
+            "loss_avg/loss_adv": avg_epoch_loss[1].item(),
+            "loss_avg/loss_gen_total": avg_epoch_loss[2].item(),
+            "loss_avg/loss_fm": avg_epoch_loss[3].item(),
+            "loss_avg/loss_mel": avg_epoch_loss[4].item(),
+            "loss_avg/loss_kl": avg_epoch_loss[5].item(),
             "learning_rate/lr_d": lr_d,
             "learning_rate/lr_g": lr_g,
             }
@@ -1209,7 +1232,7 @@ def training_loop(
                 })
             if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                 scalar_dict_avg.update({
-                    "loss_avg/loss_sd": avg_epoch_loss[6],
+                    "loss_avg/loss_sd": avg_epoch_loss[6].item(),
                 })
 
             summarize(writer=writer, global_step=global_step, scalars=scalar_dict_avg)
@@ -1328,6 +1351,7 @@ def training_loop(
                         hps=config,
                         vocoder=vocoder,
                         architecture=architecture,
+                        vits2_mode=vits2_mode,
                     )
         if done:
             # Clean-up process IDs from memory

@@ -20,7 +20,7 @@ pretraineds_hifigan_list = [
 ]                                 
 models_list = [
     ("predictors/", ["rmvpe.pt"]),
-    #("predictors/", ["placeholder.pt"], "https://huggingface.co/Codename0/codename-rvc-fork-3-assets/resolve/main/models/predictors/placeholder")
+    ("predictors/", ["fcpe_ddsp.pt"], "https://huggingface.co/Codename0/codename-rvc-fork-4-assets/resolve/main/f0_predictors")
 ]
 embedders_list = [
     ("embedders/contentvec/", ["pytorch_model.bin", "config.json"]),

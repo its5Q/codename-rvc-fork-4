@@ -14,7 +14,7 @@ from torch import Tensor
 now_dir = os.getcwd()
 sys.path.append(now_dir)
 
-from rvc.lib.predictors.f0 import CREPE, RMVPE
+from rvc.lib.predictors.f0 import CREPE, RMVPE, FCPE
 
 import logging
 
@@ -239,6 +239,12 @@ class Pipeline:
                 device=self.device, sample_rate=self.sample_rate, hop_size=self.window
             )
             f0 = model.get_f0(x, filter_radius=0.03)
+            del model
+        elif f0_method == "fcpe":
+            model = FCPE(
+                device=self.device, sample_rate=self.sample_rate, hop_size=self.window
+            )
+            f0 = model.get_f0(x, p_len, filter_radius=0.006, test_time_augmentation=True)
             del model
         # f0 adjustments
         if f0_autotune is True:
