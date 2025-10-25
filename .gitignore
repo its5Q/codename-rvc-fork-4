@@ -24,6 +24,7 @@ assets/audios/audio-others/
 logs/
 rvc/models/pretraineds/
 rvc/models/predictors/fcpe.pt
+rvc/models/predictors/fcpe_ddsp.pt
 rvc/models/predictors/rmvpe.pt
 rvc/models/embedders/spin_v1/pytorch_model.bin
 rvc/models/embedders/spin_v2/pytorch_model.bin
