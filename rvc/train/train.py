@@ -349,13 +349,13 @@ def get_optimizers(
         lr=custom_lr_g if use_custom_lr else config.train.learning_rate,
         betas=(0.8, 0.99),
         eps=1e-9,
-        weight_decay=0.001,
+        weight_decay=1.0,
     )
     adamwspd_args_d = dict(
         lr=custom_lr_d if use_custom_lr else config.train.learning_rate,
         betas=(0.8, 0.99),
         eps=1e-9,
-        weight_decay=0.001,
+        weight_decay=1.0,
     )
 
     # For exotic optimizers
@@ -424,6 +424,10 @@ def get_optimizers(
 
         optim_g = AdamSPD(param_group_g, **adamwspd_args_g)
         optim_d = AdamSPD(param_group_d, **adamwspd_args_d,)
+
+        proj_strength_mult_g = adamwspd_args_g['weight_decay']
+        proj_strength_mult_d = adamwspd_args_d['weight_decay']
+        print(f"    ██████  Proj. Strength Mult. for AdamSPD: G; {proj_strength_mult_g}, D; {proj_strength_mult_d}")
     else:
         raise ValueError(f"Unknown optimizer choice: {optimizer_choice}")
     return optim_g, optim_d
