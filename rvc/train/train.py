@@ -349,13 +349,13 @@ def get_optimizers(
         lr=custom_lr_g if use_custom_lr else config.train.learning_rate,
         betas=(0.8, 0.99),
         eps=1e-9,
-        weight_decay=1.0,
+        weight_decay=0.5,
     )
     adamwspd_args_d = dict(
         lr=custom_lr_d if use_custom_lr else config.train.learning_rate,
         betas=(0.8, 0.99),
         eps=1e-9,
-        weight_decay=1.0,
+        weight_decay=0.5,
     )
 
     # For exotic optimizers
@@ -1078,14 +1078,15 @@ def training_loop(
                 grad_norm_g_clipped = commons.get_total_norm([p.grad for p in net_g.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=False) # Grad retrieval for logging
                 gradscaler.step(optim_g) # Optim step
                 gradscaler.update() # Scaler update, to prepare the scaling for the next iteration
+                skip_lr_sched = (scale > gradscaler.get_scale())
             else:
                 loss_gen_total.backward() # Loss backward
                 grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=999999) # Grad clipping
                 grad_norm_g_clipped = commons.get_total_norm([p.grad for p in net_g.parameters() if p.grad is not None], norm_type=2.0, error_if_nonfinite=True) # Grad retrieval for logging
                 optim_g.step() # Optim step
+                skip_lr_sched = False
 
             # Per step exp lr decay for generator
-            skip_lr_sched = (scale > gradscaler.get_scale())
             if not skip_lr_sched: # We skip lr scheduler step if there were nans / infs due to gradscaler's scaling.
                 if use_lr_scheduler and (not use_warmup or warmup_completed) and lr_scheduler == "exp decay step":
                     scheduler_d.step()
