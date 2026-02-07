@@ -14,11 +14,10 @@ echo %address%
 :: ask user to key in the saved model directory, example "C:\tmp\mnist_model"
 set /p UserInputPath=Key in model saved directory:
 
+::start tensorboard
+start "" tensorboard --logdir="%UserInputPath%" --host="%host%" --port=25565 
+
+TIMEOUT /T 3 /NOBREAK >nul
+
 :: use default browser to open tensorboard webpage
 explorer %address%
-
-::start tensorboard
-tensorboard --logdir="%UserInputPath%" --port=25565 --bind_all
-
-:: to stop tensorboard, press Ctrl + C in command prompt, type "y" then hit enter.
-pause
