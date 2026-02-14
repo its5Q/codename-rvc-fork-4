@@ -103,7 +103,6 @@ class DynamicSpectralTilt_IIR(nn.Module):
         else:
             iir_mode = "short_train"
 
-        print(f"IIR FILTER MODE DEBUG: {iir_mode}")
         return fast_iir_filter_triton(input_signal, alpha, mode=iir_mode, initial_state=initial_state)
 
 
