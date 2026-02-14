@@ -19,60 +19,160 @@ from torch.amp import autocast # guard
 from torch.utils.checkpoint import checkpoint
 
 from rvc.lib.algorithm.generators.pcph_gan_modules.pcph_dirichlet_fused import FusedDirichlet
+from rvc.lib.algorithm.generators.pcph_gan_modules.spectral_tilt_triton_fused import fast_iir_filter_triton
 from rvc.lib.algorithm.generators.pcph_gan_modules.snake_beta_fused_triton import SnakeBeta as SnakeBetaFused, snake_kaiming_normal_
 from rvc.lib.algorithm.generators.pcph_gan_modules.PchipF0UpsamplerTorch import PchipF0UpsamplerTorch
 
 def get_padding(kernel_size, dilation=1):
     return int((kernel_size * dilation - dilation) / 2)
 
+
 def create_resblock_conv1d_layer(channels, kernel_size, dilation):
-    m = torch.nn.Conv1d(
-        channels, channels, kernel_size, 1, dilation=dilation, padding=get_padding(kernel_size, dilation)
-    )
+    m = torch.nn.Conv1d(channels, channels, kernel_size, 1, dilation=dilation, padding=get_padding(kernel_size, dilation))
     # SnakeBeta adapted initialization
-    snake_kaiming_normal_(m.weight, alpha=1.0, beta=1.0, kind='approx')
+    snake_kaiming_normal_(m.weight, alpha=2.9, beta=2.9, kind='approx')
     if m.bias is not None:
         nn.init.constant_(m.bias, 0)
-
     return weight_norm(m)
-    
+
+
 def create_ups_convtranspose1d_layer(in_channels, out_channels, kernel_size, stride):
-    m = torch.nn.ConvTranspose1d(
-        in_channels, out_channels, kernel_size, stride, padding=(kernel_size - stride) // 2
-    )
+    m = torch.nn.ConvTranspose1d(in_channels, out_channels, kernel_size, stride, padding=(kernel_size - stride) // 2)
     return weight_norm(m)
 
 
-class KaiserSincFilter1d(nn.Module):
-    def __init__(
-        self, 
-        channels, 
-        kernel_size=61,
-        stride=1, 
-        rolloff=0.90,
-        beta=10.0,
-    ):
+class PhaseDispersion(nn.Module):
+    def __init__(self, sample_rate, duration_ms=2.66, dispersion_factor=50.0):
         super().__init__()
+        kernel_size = int((duration_ms / 1000.0) * sample_rate)
         if kernel_size % 2 == 0:
             kernel_size += 1
 
-        self.channels = channels
-        self.stride = stride
         self.padding = (kernel_size - 1) // 2
 
-        cutoff = 0.5 * rolloff
-        t = torch.arange(kernel_size, dtype=torch.float32) - (kernel_size - 1) / 2
+        t = torch.linspace(-0.5, 0.5, kernel_size)
 
-        sinc_wave = torch.sinc(2 * cutoff * t)
-        window = torch.kaiser_window(kernel_size, periodic=False, beta=beta)
+        chirp = torch.sin(dispersion_factor * t**2) 
 
-        filter_kernel = sinc_wave * window
-        filter_kernel = filter_kernel / filter_kernel.sum()
+        window = torch.hann_window(kernel_size)
+        impulse_response = (chirp * window).view(1, 1, -1)
 
-        self.register_buffer("kernel", filter_kernel.view(1, 1, -1).repeat(channels, 1, 1))
+        impulse_response = impulse_response / (torch.norm(impulse_response) + 1e-8)
+
+        self.register_buffer("dispersion_kernel", impulse_response)
 
     def forward(self, x):
-        return F.conv1d(x, self.kernel, stride=self.stride, padding=self.padding, groups=self.channels)
+        b, c, t = x.shape
+        kernel = self.dispersion_kernel.expand(c, -1, -1)
+
+        return F.conv1d(
+            x, 
+            kernel, 
+            padding=self.padding, 
+            groups=c
+        )
+
+
+class DynamicSpectralTilt_IIR(nn.Module):
+    def __init__(self, sample_rate, hidden_dim=64):
+        super().__init__()
+        self.sample_rate = sample_rate
+        
+        self.f0_to_alpha = nn.Sequential(
+            nn.Conv1d(1, hidden_dim, 1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv1d(hidden_dim, 1, 1),
+            nn.Sigmoid() 
+        )
+
+        nn.init.zeros_(self.f0_to_alpha[2].weight)
+        nn.init.constant_(self.f0_to_alpha[2].bias, -4.0)
+
+    def forward(self, x, f0_upsampled, voiced_mask, initial_state=None):
+        nyquist = self.sample_rate / 2.0
+        f0_norm = f0_upsampled / nyquist
+        f0_input = torch.log2(f0_norm * 10.0 + 1.0)
+
+        alpha = self.f0_to_alpha(f0_input) * 0.98
+        alpha = alpha * voiced_mask
+
+        input_signal = (1.0 - alpha) * x
+
+        if not self.training:
+            iir_mode = "long_infer" # "short_infer" is also available, but its purpose is for Streaming-Inference, not offline.
+        else:
+            iir_mode = "short_train"
+
+        print(f"IIR FILTER MODE DEBUG: {iir_mode}")
+        return fast_iir_filter_triton(input_signal, alpha, mode=iir_mode, initial_state=initial_state)
+
+
+class TimeVarFIRFilter(torch.nn.Module):
+    def __init__(self):
+        super(TimeVarFIRFilter, self).__init__()
+
+    def forward(self, signal, f_coef):
+        if signal.dim() == 3:
+            signal = signal.squeeze(1)
+
+        if f_coef.shape[1] != signal.shape[1]: 
+            f_coef = f_coef.transpose(1, 2) 
+
+        b, t = signal.shape
+        k = f_coef.shape[-1]
+
+        padded_signal = F.pad(signal, (k - 1, 0))
+        stride_b, stride_t = padded_signal.stride()
+
+        windows = padded_signal.as_strided(size=(b, t, k), stride=(stride_b, stride_t, stride_t))
+        y = torch.sum(windows * f_coef, dim=-1, keepdim=True)
+
+        return y.transpose(1, 2)
+
+
+class SincFilter(torch.nn.Module):
+    def __init__(self, sample_rate, min_duration_ms=0.646):
+        super(SincFilter, self).__init__()
+        filter_order = int((min_duration_ms / 1000.0) * sample_rate)
+
+        if filter_order % 2 == 0:
+            filter_order += 1
+
+        self.half_k = (filter_order - 1) // 2
+        self.order = self.half_k * 2 + 1
+
+        n_index = torch.arange(-self.half_k, self.half_k + 1, dtype=torch.float32)
+        self.register_buffer("n_index", n_index.view(1, 1, -1))
+
+        window = 0.54 + 0.46 * torch.cos(2 * np.pi * n_index / self.order)
+        self.register_buffer("window", window.view(1, 1, -1))
+
+        flip = torch.pow(-1, self.n_index)
+        self.register_buffer("flip", flip)
+
+        impulse = torch.zeros_like(self.window)
+        center_idx = self.half_k
+        impulse[:, :, center_idx] = self.window[:, :, center_idx]
+        self.register_buffer("impulse", impulse)
+
+    def forward(self, cut_f):
+        if cut_f.dim() == 2:
+            cut_f = cut_f.unsqueeze(-1)
+        if cut_f.shape[1] == 1 and cut_f.shape[2] != 1:
+             cut_f = cut_f.transpose(1, 2)
+
+        sinc_term = torch.sinc(cut_f * self.n_index)
+        lp_c = cut_f * sinc_term * self.window
+
+        hp_c = self.impulse - lp_c
+
+        lp_coef_norm = torch.sum(lp_c, dim=2, keepdim=True)
+        hp_coef_norm = torch.sum(hp_c * self.flip, dim=2, keepdim=True)
+
+        lp_c = lp_c / (lp_coef_norm + 1e-8)
+        hp_c = hp_c / (hp_coef_norm + 1e-8)
+
+        return lp_c, hp_c
 
 
 class pu_downsampler(nn.Module):
@@ -106,7 +206,7 @@ class pu_downsampler(nn.Module):
 
         return self.mixer(x)
 
-# Residual block ( Similar to HiFi-GAN but introduces masking as seen in VITS1 ) 
+ 
 class ResBlock(torch.nn.Module):
     """
     A residual block module that applies a series of 1D convolutional layers
@@ -132,12 +232,9 @@ class ResBlock(torch.nn.Module):
         self.convs2 = self._create_convs(channels, kernel_size, [1] * len(dilations))
 
         self.acts1 = nn.ModuleList([
-            SnakeBetaFused(num_channels=channels, init=1.0, beta_init=1.0, log_scale=True) for _ in dilations])
+            SnakeBetaFused(num_channels=channels, init=2.9, beta_init=2.9, log_scale=True) for _ in dilations])
         self.acts2 = nn.ModuleList([
-            SnakeBetaFused(num_channels=channels, init=1.0, beta_init=1.0, log_scale=True) for _ in dilations])
-
-        #self.filters1 = nn.ModuleList([KaiserSincFilter1d(channels) for _ in dilations])
-        #self.filters2 = nn.ModuleList([KaiserSincFilter1d(channels) for _ in dilations])
+            SnakeBetaFused(num_channels=channels, init=2.9, beta_init=2.9, log_scale=True) for _ in dilations])
 
     @staticmethod
     def _create_convs(channels: int, kernel_size: int, dilations: Tuple[int]):
@@ -160,17 +257,17 @@ class ResBlock(torch.nn.Module):
             x_residual = x # Residual store
 
             xt = self.acts1[i](x) # Activation 1
-            #xt = self.filters1[i](xt) # Anti-Aliasing 1 - Disabled, needs testing in other trial.
 
-            if x_mask is not None: # Masking 1
-                xt = xt * x_mask
+            if x_mask is not None:
+                xt = xt * x_mask # Masking 1
+
             xt = conv1(xt) # Conv 1
 
             xt = self.acts2[i](xt) # Activation 2
-            #xt = self.filters2[i](xt) # Anti-Aliasing 2 - Disabled, needs testing in other trial.
 
-            if x_mask is not None: # Masking 2
-                xt = xt * x_mask
+            if x_mask is not None:
+                xt = xt * x_mask # Masking 2
+
             xt = conv2(xt) # Conv 2
 
             x = xt + x_residual # Residual connection
@@ -185,59 +282,46 @@ class ResBlock(torch.nn.Module):
             remove_weight_norm(conv)
 
 
-def pcph_generator_v2(
+def pcph_generator_v3(
     f0: torch.Tensor,
     hop_length: int,
     sample_rate: int,
     random_init_phase: Optional[bool] = True,
     power_factor: Optional[float] = 0.1,
     max_frequency: Optional[float] = None,
-    epsilon: float = 1e-6,
-    pchip_upsampler: bool = True,
-    use_modulo: bool = True
-) -> torch.Tensor:
+    epsilon: float = 1e-6
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     An optimized O(1) generator for Pseudo-Constant-Power Harmonic waveforms.
-    Now using a fused Triton kernel for the Dirichlet summation.
     """
-    batch, _, frames = f0.size()
+    batch, _, _ = f0.size()
     device = f0.device
 
     # F0 upsampling
-    if pchip_upsampler:
-        pchip_f0_upsampler = PchipF0UpsamplerTorch(scale_factor=hop_length)
-        f0_upsampled = pchip_f0_upsampler(f0) 
-    else:
-        f0_upsampled = F.interpolate(
-            f0, scale_factor=hop_length, mode='linear', align_corners=False
-        )
+    pchip_f0_upsampler = PchipF0UpsamplerTorch(scale_factor=hop_length)
+    f0_upsampled = pchip_f0_upsampler(f0)
 
     # Early return for mute / silent / all unvoiced
     if torch.all(f0_upsampled < 1.0):
-        # Return all zeros for harmonic signal and for voiced mask
         _, _, total_length = f0_upsampled.size()
         zeros = torch.zeros((batch, 1, total_length), device=device, dtype=f0_upsampled.dtype)
-        return zeros, zeros
+        return zeros, zeros, zeros, zeros
 
     # Preparation
-    # Create masks
     voiced_mask = (f0_upsampled > 1.0).float()
 
     # Calculate Phase (Theta)
-    # phase = 2 * pi * integral(f0 / sr)
-    phase_increment = f0_upsampled / sample_rate
+    phase_increment = f0_upsampled / sample_rate # phase = 2 * pi * integral(f0 / sr)
 
     # Randomize initial phase
     if random_init_phase:
         init_phase = torch.rand((batch, 1, 1), device=device)
-        # phase_increment[:, :, :1] = phase_increment[:, :, :1] + init_phase # Out of place
-        phase_increment[:, :, :1] += init_phase # In-place
+        phase_increment[:, :, :1] += init_phase
 
     # Cumsum
     # Multiplying by 2pi at the end to save ops during the cumsum
     phase = torch.cumsum(phase_increment.double(), dim=2) * 2.0 * torch.pi
-    if use_modulo:
-        phase = torch.fmod(phase, 2.0 * torch.pi)
+    phase = torch.fmod(phase, 2.0 * torch.pi)
     phase = phase.float()
 
     # Dynamic harmonic count (N)
@@ -260,12 +344,12 @@ def pcph_generator_v2(
     # Apply masks and scale
     pcph_harmonic_signal = harmonics * amp_scale * voiced_mask
 
-    return pcph_harmonic_signal, voiced_mask
+    return pcph_harmonic_signal, voiced_mask, phase, f0_upsampled
 
 
 class SourceModulePCPH(torch.nn.Module):
     """
-    Source Module using PCPH harmonics + Noise with learnable mixing.
+    Source Module using PCPH harmonics + Cyclic Noise with Sinc-based mixing.
     """
     def __init__(
         self,
@@ -274,7 +358,7 @@ class SourceModulePCPH(torch.nn.Module):
         random_init_phase: bool = True,
         power_factor: float = 0.1,
         add_noise_std: float = 0.003,
-        use_pchip: bool = True,
+        beta: float = 0.870,
     ):
         super(SourceModulePCPH, self).__init__()
         self.sample_rate = sample_rate
@@ -282,12 +366,18 @@ class SourceModulePCPH(torch.nn.Module):
         self.random_init_phase = random_init_phase
         self.power_factor = power_factor
         self.noise_std = add_noise_std
-        self.use_pchip = use_pchip
+        self.beta = beta
 
+        self.sinc_filter = SincFilter(sample_rate, min_duration_ms=0.646) # Maintains ~31 taps @ 48k
+        self.dispersion = PhaseDispersion(sample_rate, duration_ms=2.66, dispersion_factor=50.0) # Maintains ~128 taps @ 48k
+
+        self.tv_filter = TimeVarFIRFilter()
+        self.dynamic_tilt_filter = DynamicSpectralTilt_IIR(sample_rate=sample_rate)
+        self.f0_to_cut = nn.Conv1d(1, 1, kernel_size=1)
         self.l_linear = torch.nn.Linear(1, 1, bias=False)
         self.l_tanh = torch.nn.Tanh()
 
-    def forward(self, f0: torch.Tensor, upsample_factor: int = None):
+    def forward(self, f0: torch.Tensor, upsample_factor: int = None, initial_state=None):
         """
         f0: (Batch, Frames) or (Batch, 1, Frames)
         """
@@ -299,34 +389,46 @@ class SourceModulePCPH(torch.nn.Module):
         with autocast('cuda', enabled=False):
             f0 = f0.float()
 
-            # Generate pcph harm signal and voiced mask
+            # Generate pcph harmonics, mask, and phase
             with torch.no_grad():
-                pcph_harmonic_signal, voiced_mask = pcph_generator_v2(
+                pcph_harmonic_signal, voiced_mask, phase, f0_upsampled = pcph_generator_v3(
                     f0,
                     hop_length=hop,
                     sample_rate=self.sample_rate,
-                    pchip_upsampler=self.use_pchip,
                     random_init_phase=self.random_init_phase,
                     power_factor=self.power_factor
                 )
 
-            # Generate Noise
-            is_fully_unvoiced = torch.all(voiced_mask == 0.0)
+            # Phase dispersion
+            pcph_harmonic_signal = self.dispersion(pcph_harmonic_signal)
 
-            if is_fully_unvoiced:
-                # Generate gaussian noise
-                noise = torch.randn_like(pcph_harmonic_signal)
-                # Excitation is only noise
-                excitation_signal = noise * (self.power_factor / 3.0)
+            # Spectral tilting
+            res = self.dynamic_tilt_filter(pcph_harmonic_signal, f0_upsampled, voiced_mask, initial_state=initial_state)
+            if isinstance(res, tuple):
+                pcph_harmonic_signal, new_state = res
             else:
-                # Voiced: small texture noise (std). Unvoiced: louder noise (amp / 3).
-                noise_amp = voiced_mask * self.noise_std + (1.0 - voiced_mask) * (self.power_factor / 3.0)
-                # Generate Gaussian noise
-                noise = torch.randn_like(pcph_harmonic_signal) * noise_amp
-                # Merge harmonic signal and noise
-                excitation_signal = pcph_harmonic_signal + noise
+                pcph_harmonic_signal, new_state = res, None
 
-        # Ensure matching dtype
+
+            # Noise Generation
+            noise = torch.randn_like(pcph_harmonic_signal)          #  Base noise
+            decay = torch.exp(-phase / (2 * torch.pi * self.beta))  #  Cyclic Decay Envelope
+            cyclic_noise = noise * decay * self.noise_std           #  Apply decay only to voiced regions
+            unvoiced_gain = self.power_factor / 3.0
+
+            flat_noise = torch.randn_like(pcph_harmonic_signal) * unvoiced_gain
+            final_noise = torch.where(voiced_mask > 0.5, cyclic_noise, flat_noise)  # Combine: Cyclic in voiced, Flat in unvoiced
+
+            # Learn a shift/scale on F0 for optimal cutoff
+            nyquist = self.sample_rate / 2
+            cut_f = torch.sigmoid(self.f0_to_cut(f0_upsampled / nyquist))
+            lp_coef, hp_coef = self.sinc_filter(cut_f)  # Get Sinc coefs
+
+            # Apply Filters: Harmonics -> LP, Noise -> HP
+            filtered_harm = self.tv_filter(pcph_harmonic_signal, lp_coef)
+            filtered_noise = self.tv_filter(final_noise, hp_coef)
+            excitation_signal = filtered_harm + filtered_noise
+
         excitation_signal = excitation_signal.to(dtype=self.l_linear.weight.dtype)
 
         # Trainable projection ( linear -> tanh )
@@ -334,7 +436,7 @@ class SourceModulePCPH(torch.nn.Module):
         excitation = self.l_tanh(self.l_linear(excitation_signal))
         excitation = excitation.transpose(1, 2)
 
-        return excitation
+        return excitation, new_state
 
 class PCPH_GAN_Generator(nn.Module):
     def __init__(
@@ -357,6 +459,8 @@ class PCPH_GAN_Generator(nn.Module):
         self.num_upsamples = len(upsample_rates)
         total_ups_factor = math.prod(upsample_rates)
 
+        self.use_tanh = False
+
         # PCPH handler
         self.m_source = SourceModulePCPH(
             sample_rate=sr,
@@ -364,9 +468,9 @@ class PCPH_GAN_Generator(nn.Module):
             random_init_phase=True,
             power_factor=0.1,
             add_noise_std=0.003,
-            use_pchip=True
+            beta=0.870
         )
-
+        
         # Initial feats conv, projection: 192 -> 512
         self.conv_pre = weight_norm(Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3))
 
@@ -409,8 +513,8 @@ class PCPH_GAN_Generator(nn.Module):
         # x: [B, 192, Frames]
         # f0: [B, Frames]
 
-        # Generate the prior
-        har_prior = self.m_source(f0) # Output: B, 1, F
+        # Generate the prior and retrieve the state
+        har_prior, new_state = self.m_source(f0) # Output: B, 1, F
 
         # Pre-convolution ( Channel expansion: 192 -> 512 )
         x = self.conv_pre(x)
@@ -447,10 +551,14 @@ class PCPH_GAN_Generator(nn.Module):
         x = F.silu(x, inplace=self.use_inplace)
         # Post conv
         x = self.conv_post(x)
-        # Tanh
-        x = torch.tanh(x)
+        
+        # Tanh / Clamp
+        if self.use_tanh:
+            x = torch.tanh(x)
+        else:
+            x = torch.clamp(x, min=-1.0, max=1.0)
 
-        return x
+        return x, new_state
 
     def remove_weight_norm(self):
         # Upsamplers

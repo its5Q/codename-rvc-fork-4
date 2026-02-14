@@ -61,6 +61,8 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, load_opt=1):
         if opt_state:
             optimizer.load_state_dict(opt_state)
             print("Loaded optimizer state.")
+        else:
+            raise ValueError(f"[ERROR] Missing optimizer state...")
 
     print(f"Loaded checkpoint '{checkpoint_path}' (iteration {checkpoint_dict['iteration']})")
     return (

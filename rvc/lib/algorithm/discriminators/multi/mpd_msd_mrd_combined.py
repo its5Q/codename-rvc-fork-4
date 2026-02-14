@@ -84,7 +84,7 @@ class DiscriminatorS(torch.nn.Module):
             ]
         )
         self.conv_post = norm_f(torch.nn.Conv1d(1024, 1, 3, 1, padding=1))
-        self.lrelu = torch.nn.LeakyReLU(LRELU_SLOPE)
+        self.lrelu = torch.nn.LeakyReLU(LRELU_SLOPE, inplace=True)
 
     def forward(self, x):
         fmap = []
@@ -144,7 +144,7 @@ class DiscriminatorP(torch.nn.Module):
         )
 
         self.conv_post = norm_f(torch.nn.Conv2d(1024, 1, (3, 1), 1, padding=(1, 0)))
-        self.lrelu = torch.nn.LeakyReLU(LRELU_SLOPE)
+        self.lrelu = torch.nn.LeakyReLU(LRELU_SLOPE, inplace=True)
 
     def forward(self, x):
         fmap = []
@@ -173,6 +173,8 @@ class DiscriminatorR(nn.Module):
 
         self.lrelu_slope = 0.1
         self.d_mult = 1
+        n_fft, hop_length, win_length = self.resolution
+        self.register_buffer("window", torch.hann_window(win_length), persistent=False)
 
         self.convs = nn.ModuleList(
             [
@@ -218,40 +220,33 @@ class DiscriminatorR(nn.Module):
             nn.Conv2d(int(32 * self.d_mult), 1, (3, 3), padding=(1, 1))
         )
 
+    def spectrogram(self, x: torch.Tensor) -> torch.Tensor:
+        n_fft, hop_length, win_length = self.resolution
+
+        p = (n_fft - hop_length) // 2
+        x = F.pad(x, (p, p), mode="reflect").squeeze(1)
+
+        x = torch.stft(
+            x,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            win_length=win_length,
+            window=self.window, 
+            center=False,
+            return_complex=True,
+        )
+
+        return torch.abs(x)
+
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         fmap = []
-
-        x = self.spectrogram(x)
-        x = x.unsqueeze(1)
+        x = self.spectrogram(x).unsqueeze(1)
         for l in self.convs:
             x = l(x)
-            x = F.leaky_relu(x, self.lrelu_slope)
+            x = F.leaky_relu(x, self.lrelu_slope, inplace=True)
             fmap.append(x)
         x = self.conv_post(x)
         fmap.append(x)
         x = torch.flatten(x, 1, -1)
 
         return x, fmap
-
-    def spectrogram(self, x: torch.Tensor) -> torch.Tensor:
-        n_fft, hop_length, win_length = self.resolution
-        window = torch.hann_window(win_length, device=x.device)
-        x = F.pad(
-            x,
-            (int((n_fft - hop_length) / 2), int((n_fft - hop_length) / 2)),
-            mode="reflect",
-        )
-        x = x.squeeze(1)
-        x = torch.stft(
-            x,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            win_length=win_length,
-            window=window,
-            center=False,
-            return_complex=True,
-        )
-        x = torch.view_as_real(x)  # [B, F, TT, 2]
-        mag = torch.norm(x, p=2, dim=-1)  # [B, F, TT]
-
-        return mag

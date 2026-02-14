@@ -159,7 +159,6 @@ from_scratch = False
 use_lr_scheduler = lr_scheduler != "none"
 
 # Globals ( tweakable~ )
-randomized = True
 benchmark_mode = False
 enable_persistent_workers = True
 
@@ -170,6 +169,7 @@ pretrain_preview_interval = 100 # Measured in steps.
 
 override_pretrain_lr = False
 new_pretrain_lr = 5e-5 # If you changed it, it needs to be re-adjusted to the most recent lr ~ anytime you resume!
+from_scratch_clip = True
 
 # EXPERIMENTAL
 use_trajectory = False
@@ -297,7 +297,7 @@ def prepare_dataloaders(config, n_gpus, rank, batch_size, use_validation, benchm
 
     return train_loader, val_loader
 
-def get_g_model(config, sample_rate, vocoder, use_checkpointing, randomized):
+def get_g_model(config, sample_rate, vocoder, use_checkpointing):
     from rvc.lib.algorithm.synthesizers import Synthesizer
     return Synthesizer(
         config.data.filter_length // 2 + 1,
@@ -307,7 +307,6 @@ def get_g_model(config, sample_rate, vocoder, use_checkpointing, randomized):
         sr = sample_rate,
         vocoder = vocoder,
         checkpointing = use_checkpointing,
-        randomized = randomized,
         vits2_mode = vits2_mode,
     )
 
@@ -471,9 +470,9 @@ def setup_models_for_training(net_g, net_d, device, device_id, n_gpus):
 
     return net_g, net_d
 
-def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkpointing, randomized, sample_rate, optimizer_choice, custom_lr_g, custom_lr_d, use_custom_lr, total_epoch_count, train_loader, device, device_id, n_gpus, rank):
+def load_models_and_optimizers(config, pretrainG, pretrainD, vocoder, use_checkpointing, sample_rate, optimizer_choice, custom_lr_g, custom_lr_d, use_custom_lr, total_epoch_count, train_loader, device, device_id, n_gpus, rank):
     # Init the models
-    net_g = get_g_model(config, sample_rate, vocoder, use_checkpointing, randomized)
+    net_g = get_g_model(config, sample_rate, vocoder, use_checkpointing)
     net_d = get_d_model(config, vocoder, use_checkpointing)
     try:
         print("    ██████  Starting the training ...")
@@ -843,7 +842,6 @@ def run(
         pretrainD,
         vocoder,
         use_checkpointing,
-        randomized,
         sample_rate, 
         optimizer_choice,
         custom_lr_g,
@@ -862,7 +860,7 @@ def run(
         writer_eval = SummaryWriter(
             log_dir=os.path.join(experiment_dir, "eval"),
             flush_secs=86400,
-            purge_step=global_step
+            purge_step=global_step + 1
         )
 
         if use_trajectory:
@@ -1082,6 +1080,15 @@ def training_loop(
             if not from_scratch:
                 num_batches_in_epoch += 1
 
+            if from_scratch_clip:
+                if global_step < 15000:
+                    clip_value = 200
+                else:
+                    clip_value = 300
+            else:
+                clip_value = float("inf")
+
+
             if device.type == "cuda":
                 info = [tensor.cuda(device_id, non_blocking=True) for tensor in info]
             elif device.type != "cuda":
@@ -1108,13 +1115,12 @@ def training_loop(
                     y_hat, ids_slice, x_mask, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q) = (model_output)
 
                 # Slice the original waveform ( y ) to match the generated slice:
-                if randomized:
-                    y = commons.slice_segments(
-                        y,
-                        ids_slice * config.data.hop_length,
-                        config.train.segment_size,
-                        dim=3,
-                    )
+                y = commons.slice_segments(
+                    y,
+                    ids_slice * config.data.hop_length,
+                    config.train.segment_size,
+                    dim=3,
+                )
 
             if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                 reshaped_y = y.view(-1, y.size(-1))
@@ -1143,11 +1149,11 @@ def training_loop(
                 gradscaler.scale(loss_disc).backward() # Scale and backward of the loss
                 gradscaler.unscale_(optim_d) # Unscale
                 scale = gradscaler.get_scale() # To retrieve current gradscaler's scaling
-                grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=float("inf")) # Grad clipping
+                grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=clip_value) # Grad clipping
                 gradscaler.step(optim_d) # Optim step
             else:
                 loss_disc.backward() # Loss backward
-                grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=float("inf")) # Grad clipping
+                grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=clip_value) # Grad clipping
                 optim_d.step() # Optim step
 
             # Run discriminator on generated output
@@ -1211,13 +1217,13 @@ def training_loop(
             if train_dtype == torch.float16:
                 gradscaler.scale(loss_gen_total).backward() # Scale and backward of the loss
                 gradscaler.unscale_(optim_g) # Unscale
-                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=float("inf")) # Grad clipping
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=clip_value) # Grad clipping
                 gradscaler.step(optim_g) # Optim step
                 gradscaler.update() # Scaler update, to prepare the scaling for the next iteration
                 skip_lr_sched = (scale > gradscaler.get_scale())
             else:
                 loss_gen_total.backward() # Loss backward
-                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=float("inf")) # Grad clipping
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=clip_value) # Grad clipping
                 optim_g.step() # Optim step
                 skip_lr_sched = False
 
@@ -1337,15 +1343,12 @@ def training_loop(
             mel = mel.half()
 
         # Used for tensorboard chart - slice/mel_org
-        if randomized:
-            y_mel = commons.slice_segments(
-                mel,
-                ids_slice,
-                config.train.segment_size // config.data.hop_length,
-                dim=3,
-            )
-        else:
-            y_mel = mel
+        y_mel = commons.slice_segments(
+            mel,
+            ids_slice,
+            config.train.segment_size // config.data.hop_length,
+            dim=3,
+        )
 
         # used for tensorboard chart - slice/mel_gen
         y_hat_mel = wave_to_mel(config, y_hat, half=train_dtype)
