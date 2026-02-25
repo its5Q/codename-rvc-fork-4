@@ -19,16 +19,15 @@ class Applio(Base):
         spacing_size: sizes.Size | str = sizes.spacing_md,
         radius_size: sizes.Size | str = sizes.radius_md,
         text_size: sizes.Size | str = sizes.text_lg,
-        font: fonts.Font | str | Iterable[fonts.Font | str] = (
-            "Syne V",
+        font: fonts.Font | str | Iterable[fonts.Font | str] = [
             fonts.GoogleFont("Syne"),
             "ui-sans-serif",
             "system-ui",
-        ),
-        font_mono: fonts.Font | str | Iterable[fonts.Font | str] = (
+        ],
+        font_mono: fonts.Font | str | Iterable[fonts.Font | str] = [
             "ui-monospace",
             fonts.GoogleFont("Nunito Sans"),
-        ),
+        ],
     ):
         super().__init__(
             primary_hue=primary_hue,
@@ -277,5 +276,5 @@ class Applio(Base):
             table_odd_background_fill_dark="*neutral_900",
             table_radius="*radius_lg",
             table_row_focus="*color_accent_soft",
-            table_row_focus_dark="*color_accent_soft",
+            table_row_focus_dark="*color_accent_soft"
         )

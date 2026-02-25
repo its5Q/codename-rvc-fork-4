@@ -46,7 +46,7 @@ CodenameViolet = loadThemes.load_theme() or "ParityError/Interstellar"
 
 # Define Gradio interface
 with gr.Blocks(
-    theme=CodenameViolet, title="Codename-RVC-Fork 🍇", css="footer{display:none !important}"
+    title="Codename-RVC-Fork 🍇"
 ) as Applio:
     gr.Markdown("# Codename-RVC-Fork 🍇 v4.1.0")
     gr.Markdown(
@@ -83,6 +83,14 @@ def launch_gradio(port):
         share="--share" in sys.argv,
         inbrowser="--open" in sys.argv,
         server_port=port,
+        css="""
+        footer{display:none !important}
+        label.checkbox-container + div {
+            margin-top: var(--spacing-md);
+            margin-bottom: 0;
+        }
+        """,
+        theme=CodenameViolet
     )
 
 

@@ -20,7 +20,6 @@ class CodenameViolet(Base):
         radius_size: sizes.Size | str = sizes.radius_md,
         text_size: sizes.Size | str = sizes.text_lg,
         font: fonts.Font | str | Iterable[fonts.Font | str] = (
-            "Syne V",
             fonts.GoogleFont("Syne"),
             "ui-sans-serif",
             "system-ui",

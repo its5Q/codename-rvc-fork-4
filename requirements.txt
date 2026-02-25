@@ -36,7 +36,7 @@ peft==0.17.1
 # Visualization and UI
 matplotlib==3.7.2
 tensorboard
-gradio==5.23.1
+gradio==6.6.0
 local_attention==1.11.2
 
 # Miscellaneous utilities
