@@ -1958,7 +1958,7 @@ def parse_arguments():
         choices=[
             "hifi_refine", # NSF-HiFi-GAN and RefineGAN ~ They share the same base config
             "ringformer",
-            "pcph_gan",
+            "alpex_gan",
         ],
         default="hifi_refine",
     )
@@ -2000,7 +2000,7 @@ def parse_arguments():
         "--vocoder",
         type=str,
         help="Vocoder name",
-        choices=["HiFi-GAN", "PCPH-GAN", "RefineGAN", "RingFormer_v1", "RingFormer_v2"],
+        choices=["HiFi-GAN", "ALPEX-GAN", "RefineGAN", "RingFormer_v1", "RingFormer_v2"],
         default="HiFi-GAN",
     )
     train_parser.add_argument(
