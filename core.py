@@ -7,7 +7,7 @@ import argparse
 import platform
 import subprocess
 import signal
-#import multiprocessing
+from multiprocessing import cpu_count
 
 
 from functools import lru_cache
@@ -941,7 +941,6 @@ def parse_arguments():
         choices=[True, False],
         help=formant_shifting_description,
         default=False,
-        required=False,
     )
     formant_qfrency_description = "Control the frequency of the formant shifting effect. Higher values result in a more pronounced effect."
     infer_parser.add_argument(
@@ -949,7 +948,6 @@ def parse_arguments():
         type=float,
         help=formant_qfrency_description,
         default=1.0,
-        required=False,
     )
     formant_timbre_description = "Control the timbre of the formant shifting effect. Higher values result in a more pronounced effect."
     infer_parser.add_argument(
@@ -957,7 +955,6 @@ def parse_arguments():
         type=float,
         help=formant_timbre_description,
         default=1.0,
-        required=False,
     )
     sid_description = "Speaker ID for multi-speaker models."
     infer_parser.add_argument(
@@ -965,7 +962,6 @@ def parse_arguments():
         type=int,
         help=sid_description,
         default=0,
-        required=False,
     )
     post_process_description = "Apply post-processing effects to the output audio."
     infer_parser.add_argument(
@@ -974,7 +970,6 @@ def parse_arguments():
         choices=[True, False],
         help=post_process_description,
         default=False,
-        required=False,
     )
     reverb_description = "Apply reverb effect to the output audio."
     infer_parser.add_argument(
@@ -983,7 +978,6 @@ def parse_arguments():
         choices=[True, False],
         help=reverb_description,
         default=False,
-        required=False,
     )
 
     pitch_shift_description = "Apply pitch shifting effect to the output audio."
@@ -993,7 +987,6 @@ def parse_arguments():
         choices=[True, False],
         help=pitch_shift_description,
         default=False,
-        required=False,
     )
 
     limiter_description = "Apply limiter effect to the output audio."
@@ -1003,7 +996,6 @@ def parse_arguments():
         choices=[True, False],
         help=limiter_description,
         default=False,
-        required=False,
     )
 
     gain_description = "Apply gain effect to the output audio."
@@ -1013,7 +1005,6 @@ def parse_arguments():
         choices=[True, False],
         help=gain_description,
         default=False,
-        required=False,
     )
 
     distortion_description = "Apply distortion effect to the output audio."
@@ -1023,7 +1014,6 @@ def parse_arguments():
         choices=[True, False],
         help=distortion_description,
         default=False,
-        required=False,
     )
 
     chorus_description = "Apply chorus effect to the output audio."
@@ -1033,7 +1023,6 @@ def parse_arguments():
         choices=[True, False],
         help=chorus_description,
         default=False,
-        required=False,
     )
 
     bitcrush_description = "Apply bitcrush effect to the output audio."
@@ -1043,7 +1032,6 @@ def parse_arguments():
         choices=[True, False],
         help=bitcrush_description,
         default=False,
-        required=False,
     )
 
     clipping_description = "Apply clipping effect to the output audio."
@@ -1053,7 +1041,6 @@ def parse_arguments():
         choices=[True, False],
         help=clipping_description,
         default=False,
-        required=False,
     )
 
     compressor_description = "Apply compressor effect to the output audio."
@@ -1063,7 +1050,6 @@ def parse_arguments():
         choices=[True, False],
         help=compressor_description,
         default=False,
-        required=False,
     )
 
     delay_description = "Apply delay effect to the output audio."
@@ -1073,7 +1059,6 @@ def parse_arguments():
         choices=[True, False],
         help=delay_description,
         default=False,
-        required=False,
     )
 
     reverb_room_size_description = "Control the room size of the reverb effect. Higher values result in a larger room size."
@@ -1082,7 +1067,6 @@ def parse_arguments():
         type=float,
         help=reverb_room_size_description,
         default=0.5,
-        required=False,
     )
 
     reverb_damping_description = "Control the damping of the reverb effect. Higher values result in a more damped sound."
@@ -1091,7 +1075,6 @@ def parse_arguments():
         type=float,
         help=reverb_damping_description,
         default=0.5,
-        required=False,
     )
 
     reverb_wet_gain_description = "Control the wet gain of the reverb effect. Higher values result in a stronger reverb effect."
@@ -1100,7 +1083,6 @@ def parse_arguments():
         type=float,
         help=reverb_wet_gain_description,
         default=0.5,
-        required=False,
     )
 
     reverb_dry_gain_description = "Control the dry gain of the reverb effect. Higher values result in a stronger dry signal."
@@ -1109,7 +1091,6 @@ def parse_arguments():
         type=float,
         help=reverb_dry_gain_description,
         default=0.5,
-        required=False,
     )
 
     reverb_width_description = "Control the stereo width of the reverb effect. Higher values result in a wider stereo image."
@@ -1118,7 +1099,6 @@ def parse_arguments():
         type=float,
         help=reverb_width_description,
         default=0.5,
-        required=False,
     )
 
     reverb_freeze_mode_description = "Control the freeze mode of the reverb effect. Higher values result in a stronger freeze effect."
@@ -1127,7 +1107,6 @@ def parse_arguments():
         type=float,
         help=reverb_freeze_mode_description,
         default=0.5,
-        required=False,
     )
 
     pitch_shift_semitones_description = "Control the pitch shift in semitones. Positive values increase the pitch, while negative values decrease it."
@@ -1136,7 +1115,6 @@ def parse_arguments():
         type=float,
         help=pitch_shift_semitones_description,
         default=0.0,
-        required=False,
     )
 
     limiter_threshold_description = "Control the threshold of the limiter effect. Higher values result in a stronger limiting effect."
@@ -1145,7 +1123,6 @@ def parse_arguments():
         type=float,
         help=limiter_threshold_description,
         default=-6,
-        required=False,
     )
 
     limiter_release_time_description = "Control the release time of the limiter effect. Higher values result in a longer release time."
@@ -1154,7 +1131,6 @@ def parse_arguments():
         type=float,
         help=limiter_release_time_description,
         default=0.01,
-        required=False,
     )
 
     gain_db_description = "Control the gain in decibels. Positive values increase the gain, while negative values decrease it."
@@ -1163,7 +1139,6 @@ def parse_arguments():
         type=float,
         help=gain_db_description,
         default=0.0,
-        required=False,
     )
 
     distortion_gain_description = "Control the gain of the distortion effect. Higher values result in a stronger distortion effect."
@@ -1172,7 +1147,6 @@ def parse_arguments():
         type=float,
         help=distortion_gain_description,
         default=25,
-        required=False,
     )
 
     chorus_rate_description = "Control the rate of the chorus effect. Higher values result in a faster chorus effect."
@@ -1181,7 +1155,6 @@ def parse_arguments():
         type=float,
         help=chorus_rate_description,
         default=1.0,
-        required=False,
     )
 
     chorus_depth_description = "Control the depth of the chorus effect. Higher values result in a stronger chorus effect."
@@ -1190,7 +1163,6 @@ def parse_arguments():
         type=float,
         help=chorus_depth_description,
         default=0.25,
-        required=False,
     )
 
     chorus_center_delay_description = "Control the center delay of the chorus effect. Higher values result in a longer center delay."
@@ -1199,7 +1171,6 @@ def parse_arguments():
         type=float,
         help=chorus_center_delay_description,
         default=7,
-        required=False,
     )
 
     chorus_feedback_description = "Control the feedback of the chorus effect. Higher values result in a stronger feedback effect."
@@ -1208,7 +1179,6 @@ def parse_arguments():
         type=float,
         help=chorus_feedback_description,
         default=0.0,
-        required=False,
     )
 
     chorus_mix_description = "Control the mix of the chorus effect. Higher values result in a stronger chorus effect."
@@ -1217,7 +1187,6 @@ def parse_arguments():
         type=float,
         help=chorus_mix_description,
         default=0.5,
-        required=False,
     )
 
     bitcrush_bit_depth_description = "Control the bit depth of the bitcrush effect. Higher values result in a stronger bitcrush effect."
@@ -1226,7 +1195,6 @@ def parse_arguments():
         type=int,
         help=bitcrush_bit_depth_description,
         default=8,
-        required=False,
     )
 
     clipping_threshold_description = "Control the threshold of the clipping effect. Higher values result in a stronger clipping effect."
@@ -1235,7 +1203,6 @@ def parse_arguments():
         type=float,
         help=clipping_threshold_description,
         default=-6,
-        required=False,
     )
 
     compressor_threshold_description = "Control the threshold of the compressor effect. Higher values result in a stronger compressor effect."
@@ -1244,7 +1211,6 @@ def parse_arguments():
         type=float,
         help=compressor_threshold_description,
         default=0,
-        required=False,
     )
 
     compressor_ratio_description = "Control the ratio of the compressor effect. Higher values result in a stronger compressor effect."
@@ -1253,7 +1219,6 @@ def parse_arguments():
         type=float,
         help=compressor_ratio_description,
         default=1,
-        required=False,
     )
 
     compressor_attack_description = "Control the attack of the compressor effect. Higher values result in a stronger compressor effect."
@@ -1262,7 +1227,6 @@ def parse_arguments():
         type=float,
         help=compressor_attack_description,
         default=1.0,
-        required=False,
     )
 
     compressor_release_description = "Control the release of the compressor effect. Higher values result in a stronger compressor effect."
@@ -1271,7 +1235,6 @@ def parse_arguments():
         type=float,
         help=compressor_release_description,
         default=100,
-        required=False,
     )
 
     delay_seconds_description = "Control the delay time in seconds. Higher values result in a longer delay time."
@@ -1280,7 +1243,6 @@ def parse_arguments():
         type=float,
         help=delay_seconds_description,
         default=0.5,
-        required=False,
     )
     delay_feedback_description = "Control the feedback of the delay effect. Higher values result in a stronger feedback effect."
     infer_parser.add_argument(
@@ -1288,7 +1250,6 @@ def parse_arguments():
         type=float,
         help=delay_feedback_description,
         default=0.0,
-        required=False,
     )
     delay_mix_description = "Control the mix of the delay effect. Higher values result in a stronger delay effect."
     infer_parser.add_argument(
@@ -1296,7 +1257,6 @@ def parse_arguments():
         type=float,
         help=delay_mix_description,
         default=0.5,
-        required=False,
     )
 
     # Parser for 'batch_infer' mode
@@ -1444,28 +1404,24 @@ def parse_arguments():
         choices=[True, False],
         help=formant_shifting_description,
         default=False,
-        required=False,
     )
     batch_infer_parser.add_argument(
         "--formant_qfrency",
         type=float,
         help=formant_qfrency_description,
         default=1.0,
-        required=False,
     )
     batch_infer_parser.add_argument(
         "--formant_timbre",
         type=float,
         help=formant_timbre_description,
         default=1.0,
-        required=False,
     )
     batch_infer_parser.add_argument(
         "--sid",
         type=int,
         help=sid_description,
         default=0,
-        required=False,
     )
     batch_infer_parser.add_argument(
         "--post_process",
@@ -1473,7 +1429,6 @@ def parse_arguments():
         choices=[True, False],
         help=post_process_description,
         default=False,
-        required=False,
     )
     batch_infer_parser.add_argument(
         "--reverb",
@@ -1481,7 +1436,6 @@ def parse_arguments():
         choices=[True, False],
         help=reverb_description,
         default=False,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1490,7 +1444,6 @@ def parse_arguments():
         choices=[True, False],
         help=pitch_shift_description,
         default=False,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1499,7 +1452,6 @@ def parse_arguments():
         choices=[True, False],
         help=limiter_description,
         default=False,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1508,7 +1460,6 @@ def parse_arguments():
         choices=[True, False],
         help=gain_description,
         default=False,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1517,7 +1468,6 @@ def parse_arguments():
         choices=[True, False],
         help=distortion_description,
         default=False,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1526,7 +1476,6 @@ def parse_arguments():
         choices=[True, False],
         help=chorus_description,
         default=False,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1535,7 +1484,6 @@ def parse_arguments():
         choices=[True, False],
         help=bitcrush_description,
         default=False,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1544,7 +1492,6 @@ def parse_arguments():
         choices=[True, False],
         help=clipping_description,
         default=False,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1553,7 +1500,6 @@ def parse_arguments():
         choices=[True, False],
         help=compressor_description,
         default=False,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1562,7 +1508,6 @@ def parse_arguments():
         choices=[True, False],
         help=delay_description,
         default=False,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1570,7 +1515,6 @@ def parse_arguments():
         type=float,
         help=reverb_room_size_description,
         default=0.5,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1578,7 +1522,6 @@ def parse_arguments():
         type=float,
         help=reverb_damping_description,
         default=0.5,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1586,7 +1529,6 @@ def parse_arguments():
         type=float,
         help=reverb_wet_gain_description,
         default=0.5,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1594,7 +1536,6 @@ def parse_arguments():
         type=float,
         help=reverb_dry_gain_description,
         default=0.5,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1602,7 +1543,6 @@ def parse_arguments():
         type=float,
         help=reverb_width_description,
         default=0.5,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1610,7 +1550,6 @@ def parse_arguments():
         type=float,
         help=reverb_freeze_mode_description,
         default=0.5,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1618,7 +1557,6 @@ def parse_arguments():
         type=float,
         help=pitch_shift_semitones_description,
         default=0.0,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1626,7 +1564,6 @@ def parse_arguments():
         type=float,
         help=limiter_threshold_description,
         default=-6,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1634,14 +1571,12 @@ def parse_arguments():
         type=float,
         help=limiter_release_time_description,
         default=0.01,
-        required=False,
     )
     batch_infer_parser.add_argument(
         "--gain_db",
         type=float,
         help=gain_db_description,
         default=0.0,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1649,7 +1584,6 @@ def parse_arguments():
         type=float,
         help=distortion_gain_description,
         default=25,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1657,7 +1591,6 @@ def parse_arguments():
         type=float,
         help=chorus_rate_description,
         default=1.0,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1665,14 +1598,12 @@ def parse_arguments():
         type=float,
         help=chorus_depth_description,
         default=0.25,
-        required=False,
     )
     batch_infer_parser.add_argument(
         "--chorus_center_delay",
         type=float,
         help=chorus_center_delay_description,
         default=7,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1680,7 +1611,6 @@ def parse_arguments():
         type=float,
         help=chorus_feedback_description,
         default=0.0,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1688,7 +1618,6 @@ def parse_arguments():
         type=float,
         help=chorus_mix_description,
         default=0.5,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1696,7 +1625,6 @@ def parse_arguments():
         type=int,
         help=bitcrush_bit_depth_description,
         default=8,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1704,7 +1632,6 @@ def parse_arguments():
         type=float,
         help=clipping_threshold_description,
         default=-6,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1712,7 +1639,6 @@ def parse_arguments():
         type=float,
         help=compressor_threshold_description,
         default=0,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1720,7 +1646,6 @@ def parse_arguments():
         type=float,
         help=compressor_ratio_description,
         default=1,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1728,7 +1653,6 @@ def parse_arguments():
         type=float,
         help=compressor_attack_description,
         default=1.0,
-        required=False,
     )
 
     batch_infer_parser.add_argument(
@@ -1736,28 +1660,24 @@ def parse_arguments():
         type=float,
         help=compressor_release_description,
         default=100,
-        required=False,
     )
     batch_infer_parser.add_argument(
         "--delay_seconds",
         type=float,
         help=delay_seconds_description,
         default=0.5,
-        required=False,
     )
     batch_infer_parser.add_argument(
         "--delay_feedback",
         type=float,
         help=delay_feedback_description,
         default=0.0,
-        required=False,
     )
     batch_infer_parser.add_argument(
         "--delay_mix",
         type=float,
         help=delay_mix_description,
         default=0.5,
-        required=False,
     )
 
     # Parser for 'tts' mode
@@ -1938,7 +1858,8 @@ def parse_arguments():
         "--cpu_threads",
         type=int,
         help="Number of CPU threads to use for preprocessing.",
-        choices=range(1, 65),
+        choices=range(1, min(cpu_count(), 192) + 1),
+        default=min(cpu_count(), 192)
     )
     preprocess_parser.add_argument(
         "--cut_preprocess",
@@ -1946,7 +1867,6 @@ def parse_arguments():
         choices=["Skip", "Simple", "Automatic"],
         help="Cut the dataset into smaller segments for faster preprocessing.",
         default="Simple",
-        required=False,
     )
     preprocess_parser.add_argument(
         "--process_effects",
@@ -1954,7 +1874,6 @@ def parse_arguments():
         choices=[True, False],
         help="Disable all filters during preprocessing.",
         default=False,
-        required=False,
     )
     preprocess_parser.add_argument(
         "--noise_reduction",
@@ -1962,7 +1881,6 @@ def parse_arguments():
         choices=[True, False],
         help="Enable noise reduction during preprocessing.",
         default=False,
-        required=False,
     )
     preprocess_parser.add_argument(
         "--noise_reduction_strength",
@@ -1970,7 +1888,6 @@ def parse_arguments():
         help="Strength of the noise reduction filter.",
         choices=[(i / 10) for i in range(11)],
         default=0.7,
-        required=False,
     )
     preprocess_parser.add_argument(
         "--chunk_len",
@@ -1978,7 +1895,6 @@ def parse_arguments():
         help="Chunk length.",
         choices=[i * 0.5 for i in range(1, 11)],
         default=3.0,
-        required=False,
     )
     preprocess_parser.add_argument(
         "--overlap_len",
@@ -1986,7 +1902,6 @@ def parse_arguments():
         help="Overlap length.",
         choices=[0.0, 0.1, 0.2, 0.3, 0.4],
         default=0.3,
-        required=False,
     )
     preprocess_parser.add_argument(
         "--normalization_mode",
@@ -1994,7 +1909,6 @@ def parse_arguments():
         help="Normalization mode.",
         choices=["none", "post_peak"],
         default="post_peak",
-        required=False,
     )
     preprocess_parser.add_argument(
         "--loading_resampling",
@@ -2002,7 +1916,6 @@ def parse_arguments():
         help="Librosa's using SoXr, FFmpeg's using Windowed Sinc filter with Blackman-Nuttall window.",
         choices=["librosa", "ffmpeg"],
         default="librosa",
-        required=True,
     )
     preprocess_parser.add_argument(
         "--use_smart_cutter",
@@ -2010,7 +1923,6 @@ def parse_arguments():
         choices=[True, False],
         help="Enable SmartCutter silence-truncation during preprocessing.",
         default=False,
-        required=False,
     )
     # Parser for 'extract' mode
     extract_parser = subparsers.add_parser(
@@ -2035,8 +1947,8 @@ def parse_arguments():
         "--cpu_threads",
         type=int,
         help="Number of CPU threads to use for feature extraction (optional).",
-        choices=range(1, 65),
-        default=None,
+        choices=range(1, min(cpu_count(), 192) + 1),
+        default=min(cpu_count(), 192),
     )
     extract_parser.add_argument(
         "--gpu",
@@ -2089,7 +2001,6 @@ def parse_arguments():
         help="Number of silent files to include.",
         choices=range(0, 11),
         default=2,
-        required=True,
     )
 
     # Parser for 'train' mode
@@ -2110,7 +2021,6 @@ def parse_arguments():
         help="Choose the architecture. ( Only RVC is universal, others need their respective forks / frameworks.",
         choices=["RVC", "Fork/Applio", "Fork"],
         default="RVC",
-        required=True,
     )  
     train_parser.add_argument(
         "--optimizer",
@@ -2132,21 +2042,18 @@ def parse_arguments():
         choices=[True, False],
         help="Enables usage of checkpointing.",
         default=False,
-        required=False,
     )
     train_parser.add_argument(
         "--custom_lr_g",
         type=float,
         help="Custom learning rate for generator.",
         default=1e-4,
-        required=False,
     )
     train_parser.add_argument(
         "--custom_lr_d",
         type=float,
         help="Custom learning rate for discriminator.",
         default=1e-4,
-        required=False,
     )
     train_parser.add_argument(
         "--epoch_save_frequency",
@@ -2265,7 +2172,6 @@ def parse_arguments():
         choices=["L1 Mel Loss", "Multi-Scale Mel Loss", "Multi-Res STFT Loss"],
         help="Available types of spectral loss functions. ",
         default="L1 Mel Loss",
-        required=True,
     )
     train_parser.add_argument(
         "--lr_scheduler",
@@ -2273,7 +2179,6 @@ def parse_arguments():
         choices=["exp decay step", "exp decay epoch", "cosine annealing", "none"],
         help="Available schedulers: exp decay step, exp decay epoch, cosine annealing, none ",
         default="exp decay",
-        required=False,
     )
     train_parser.add_argument(
         "--exp_decay_gamma",
@@ -2288,7 +2193,6 @@ def parse_arguments():
         choices=[True, False],
         help="Whether to use hold-out validation",
         default=False,
-        required=True,
     )
     train_parser.add_argument(
         "--use_kl_annealing",
@@ -2380,7 +2284,6 @@ def parse_arguments():
         choices=["Auto", "Faiss", "KMeans"],
         help="Choose the method for generating the index file.",
         default="Auto",
-        required=False,
     )
 
     # Parser for 'index' mode
@@ -2396,7 +2299,6 @@ def parse_arguments():
         choices=["Auto", "Faiss", "KMeans"],
         help="Choose the method for generating the index file.",
         default="Auto",
-        required=False,
     )
 
     # Parser for 'model_information' mode
@@ -2516,13 +2418,12 @@ def main():
                 clean_audio=args.clean_audio,
                 clean_strength=args.clean_strength,
                 export_format=args.export_format,
+                f0_file=args.f0_file,
                 embedder_model=args.embedder_model,
                 embedder_model_custom=args.embedder_model_custom,
-                f0_file=args.f0_file,
                 formant_shifting=args.formant_shifting,
                 formant_qfrency=args.formant_qfrency,
                 formant_timbre=args.formant_timbre,
-                sid=args.sid,
                 post_process=args.post_process,
                 reverb=args.reverb,
                 pitch_shift=args.pitch_shift,
@@ -2559,6 +2460,7 @@ def main():
                 delay_seconds=args.delay_seconds,
                 delay_feedback=args.delay_feedback,
                 delay_mix=args.delay_mix,
+                sid=args.sid,
             )
         elif args.mode == "batch_infer":
             run_batch_infer_script(
@@ -2578,13 +2480,12 @@ def main():
                 clean_audio=args.clean_audio,
                 clean_strength=args.clean_strength,
                 export_format=args.export_format,
+                f0_file=args.f0_file,
                 embedder_model=args.embedder_model,
                 embedder_model_custom=args.embedder_model_custom,
-                f0_file=args.f0_file,
                 formant_shifting=args.formant_shifting,
                 formant_qfrency=args.formant_qfrency,
                 formant_timbre=args.formant_timbre,
-                sid=args.sid,
                 post_process=args.post_process,
                 reverb=args.reverb,
                 pitch_shift=args.pitch_shift,
@@ -2621,6 +2522,7 @@ def main():
                 delay_seconds=args.delay_seconds,
                 delay_feedback=args.delay_feedback,
                 delay_mix=args.delay_mix,
+                sid=args.sid,
             )
         elif args.mode == "tts":
             run_tts_script(
@@ -2644,9 +2546,9 @@ def main():
                 clean_audio=args.clean_audio,
                 clean_strength=args.clean_strength,
                 export_format=args.export_format,
+                f0_file=args.f0_file,
                 embedder_model=args.embedder_model,
                 embedder_model_custom=args.embedder_model_custom,
-                f0_file=args.f0_file,
             )
         elif args.mode == "preprocess":
             run_preprocess_script(
@@ -2662,7 +2564,7 @@ def main():
                 overlap_len=args.overlap_len,
                 normalization_mode=args.normalization_mode,
                 loading_resampling=args.loading_resampling,
-                use_smart_cutter=args.use_smart_cutter
+                use_smart_cutter=args.use_smart_cutter,
             )
         elif args.mode == "extract":
             run_extract_script(
@@ -2672,7 +2574,6 @@ def main():
                 gpu=args.gpu,
                 sample_rate=args.sample_rate,
                 vocoder_arch=args.vocoder_arch,
-                vits2_mode=args.vits2_mode,
                 embedder_model=args.embedder_model,
                 embedder_model_custom=args.embedder_model_custom,
                 include_mutes=args.include_mutes,
@@ -2690,9 +2591,9 @@ def main():
                 use_warmup=args.use_warmup,
                 warmup_duration=args.warmup_duration,
                 pretrained=args.pretrained,
-                custom_pretrained=args.custom_pretrained,
                 cleanup=args.cleanup,
                 index_algorithm=args.index_algorithm,
+                custom_pretrained=args.custom_pretrained,
                 g_pretrained_path=args.g_pretrained_path,
                 d_pretrained_path=args.d_pretrained_path,
                 vocoder=args.vocoder,
@@ -2747,6 +2648,7 @@ def main():
                 pretraineds_hifigan=args.pretraineds_hifigan,
                 models=args.models,
                 exe=args.exe,
+                smartcutter=args.smartcutter,
             )
         elif args.mode == "audio_analyzer":
             run_audio_analyzer_script(
