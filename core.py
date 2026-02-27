@@ -542,6 +542,12 @@ def run_train_script(
     vits2_mode: bool = False,
     rolling_loss_steps: int = 50,
     use_tstp: bool = False,
+    grad_clip_scheduling: bool = False,
+    grad_clip_steps_duration: int = 0,
+    grad_clip_value_g_cap: int = 0,
+    grad_clip_value_d_cap: int = 0,
+    grad_clip_value_g_release: int = 0,
+    grad_clip_value_d_release: int = 0,
     use_custom_lr: bool = False,
     custom_lr_g: float = 1e-4,
     custom_lr_d: float = 1e-4,
@@ -602,6 +608,12 @@ def run_train_script(
                 vits2_mode,
                 rolling_loss_steps,
                 use_tstp,
+                grad_clip_scheduling,
+                grad_clip_steps_duration,
+                grad_clip_value_g_cap,
+                grad_clip_value_d_cap,
+                grad_clip_value_g_release,
+                grad_clip_value_d_release,
                 use_custom_lr,
                 custom_lr_g,
                 custom_lr_d
@@ -2046,7 +2058,7 @@ def parse_arguments():
         choices=[
             "hifi_refine", # NSF-HiFi-GAN and RefineGAN ~ They share the same base config
             "ringformer",
-            "pcph_gan",
+            "alpex_gan",
         ],
         default="hifi_refine",
     )
@@ -2089,7 +2101,7 @@ def parse_arguments():
         "--vocoder",
         type=str,
         help="Vocoder name",
-        choices=["HiFi-GAN", "PCPH-GAN", "RefineGAN", "RingFormer_v1", "RingFormer_v2"],
+        choices=["HiFi-GAN", "ALPEX-GAN", "RefineGAN", "RingFormer_v1", "RingFormer_v2"],
         default="HiFi-GAN",
     )
     train_parser.add_argument(
@@ -2104,7 +2116,7 @@ def parse_arguments():
         "--optimizer",
         type=str,
         help="Choose an optimizer used in training.",
-        choices=["AdamW BF16", "AdamW", "AdamSPD", "RAdam", "Ranger21", "DiffGrad", "Prodigy"],
+        choices=["AdamW", "AdamSPD", "RAdam", "Ranger21", "DiffGrad"],
         default="AdamW",
     )
     train_parser.add_argument(
@@ -2310,6 +2322,43 @@ def parse_arguments():
         choices=[True, False],
         help="Whether to use Two-Stage Training Protocol ( Freezes encoders, flow, spk emb and speeds up the lr decay. )",
         default=False,
+    )
+    train_parser.add_argument(
+        "--grad_clip_scheduling",
+        type=lambda x: bool(strtobool(x)),
+        choices=[True, False],
+        help="Whether you wanna enable grads clipping scheduling",
+        default=False,
+    )
+    train_parser.add_argument(
+        "--grad_clip_steps_duration",
+        type=int,
+        help="Duration ( in steps ) for grads clipping",
+        default=0,
+    )
+    train_parser.add_argument(
+        "--grad_clip_value_g_cap",
+        type=int,
+        help="Specify clipping value for Generator's clip_grad_norm",
+        default=0,
+    )
+    train_parser.add_argument(
+        "--grad_clip_value_d_cap",
+        type=int,
+        help="Specify clipping value for Discriminator's clip_grad_norm",
+        default=0,
+    )
+    train_parser.add_argument(
+        "--grad_clip_value_g_release",
+        type=int,
+        help="Specify what kind of clipping value you want after the scheduling, for G. Set to 0 to leave unconstrained.",
+        default=0,
+    )
+    train_parser.add_argument(
+        "--grad_clip_value_d_release",
+        type=int,
+        help="Specify what kind of clipping value you want after the scheduling, for D. Set to 0 to leave unconstrained.",
+        default=0,
     )
     train_parser.add_argument(
         "--use_custom_lr",
@@ -2661,6 +2710,12 @@ def main():
                 vits2_mode=args.vits2_mode,
                 rolling_loss_steps=args.rolling_loss_steps,
                 use_tstp=args.use_tstp,
+                grad_clip_scheduling=args.grad_clip_scheduling,
+                grad_clip_steps_duration=args.grad_clip_steps_duration,
+                grad_clip_value_g_cap=args.grad_clip_value_g_cap,
+                grad_clip_value_d_cap=args.grad_clip_value_d_cap,
+                grad_clip_value_g_release=args.grad_clip_value_g_release,
+                grad_clip_value_d_release=args.grad_clip_value_d_release,
                 use_custom_lr=args.use_custom_lr,
                 custom_lr_g=args.custom_lr_g,
                 custom_lr_d=args.custom_lr_d,

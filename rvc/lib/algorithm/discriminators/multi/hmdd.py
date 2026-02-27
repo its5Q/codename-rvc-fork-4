@@ -14,8 +14,8 @@ import pywt
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch.nn import Conv1d, AvgPool1d, Conv2d
-from torch.nn.utils.parametrizations import weight_norm, spectral_norm
+from torch.nn import Conv1d, Conv2d
+from torch.nn.utils.parametrizations import weight_norm
 
 from torchaudio.transforms import Spectrogram, Resample
 
@@ -90,23 +90,24 @@ class DWT_1D(nn.Module):
         self.filt_high[a:b] = band_high
 
     def initialization(self):
-        self.filter_low = self.filt_low[None, None, :].repeat((self.out_channels, self.in_channels // self.groups, 1))
-        self.filter_high = self.filt_high[None, None, :].repeat((self.out_channels, self.in_channels // self.groups, 1))
-        if torch.cuda.is_available():
-            self.filter_low = self.filter_low.cuda()
-            self.filter_high = self.filter_high.cuda()
+        filter_low = self.filt_low[None, None, :].repeat((self.out_channels, self.in_channels // self.groups, 1))
+        filter_high = self.filt_high[None, None, :].repeat((self.out_channels, self.in_channels // self.groups, 1))
         if self.trainable:
-            self.filter_low = nn.Parameter(self.filter_low)
-            self.filter_high = nn.Parameter(self.filter_high)
+            self.filter_low = nn.Parameter(filter_low)
+            self.filter_high = nn.Parameter(filter_high)
+        else:
+            self.register_buffer('filter_low', filter_low)
+            self.register_buffer('filter_high', filter_high)
         if self.kernel_size % 2 == 0:
             self.pad_sizes = [self.kernel_size // 2 - 1, self.kernel_size // 2 - 1]
         else:
             self.pad_sizes = [self.kernel_size // 2, self.kernel_size // 2]
 
     def forward(self, input):
-        assert isinstance(input, torch.Tensor)
-        assert len(input.size()) == 3
-        assert input.size()[1] == self.in_channels
+        if not torch.compiler.is_compiling():
+            assert isinstance(input, torch.Tensor)
+            assert len(input.size()) == 3
+            assert input.size()[1] == self.in_channels
         input = F.pad(input, pad=self.pad_sizes, mode=self.pad_type)
         return F.conv1d(input, self.filter_low.to(input.device), stride=self.stride, groups=self.groups), \
                F.conv1d(input, self.filter_high.to(input.device), stride=self.stride, groups=self.groups)
@@ -122,6 +123,8 @@ class DiscriminatorR(nn.Module):
 
         self.lrelu_slope = 0.1
         self.d_mult = 1
+        n_fft, hop_length, win_length = self.resolution
+        self.register_buffer("window", torch.hann_window(win_length), persistent=False)
 
         self.convs = nn.ModuleList(
             [
@@ -174,7 +177,7 @@ class DiscriminatorR(nn.Module):
         x = x.unsqueeze(1)
         for l in self.convs:
             x = l(x)
-            x = F.leaky_relu(x, self.lrelu_slope)
+            x = F.leaky_relu(x, self.lrelu_slope, inplace=True)
             fmap.append(x)
         x = self.conv_post(x)
         fmap.append(x)
@@ -184,7 +187,6 @@ class DiscriminatorR(nn.Module):
 
     def spectrogram(self, x: torch.Tensor) -> torch.Tensor:
         n_fft, hop_length, win_length = self.resolution
-        window = torch.hann_window(win_length, device=x.device)
         x = F.pad(
             x,
             (int((n_fft - hop_length) / 2), int((n_fft - hop_length) / 2)),
@@ -196,14 +198,12 @@ class DiscriminatorR(nn.Module):
             n_fft=n_fft,
             hop_length=hop_length,
             win_length=win_length,
-            window=window,
+            window=self.window,
             center=False,
             return_complex=True,
         )
-        x = torch.view_as_real(x)  # [B, F, TT, 2]
-        mag = torch.norm(x, p=2, dim=-1)  # [B, F, TT]
 
-        return mag
+        return torch.abs(x)
 
 
 class MultiResolutionDiscriminator(nn.Module):
@@ -245,25 +245,24 @@ class MultiResolutionDiscriminator(nn.Module):
 
 
 class DiscriminatorP(torch.nn.Module):
-    def __init__(self, period, kernel_size=5, stride=3, use_spectral_norm=False):
+    def __init__(self, period, kernel_size=5, stride=3):
         super(DiscriminatorP, self).__init__()
         self.period = period
-        norm_f = weight_norm if use_spectral_norm == False else spectral_norm
         self.dwt1d = DWT_1D()
-        self.dwt_conv1 = norm_f(Conv1d(2, 1, 1))
-        self.dwt_proj1 = norm_f(Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0)))
-        self.dwt_conv2 = norm_f(Conv1d(4, 1, 1))
-        self.dwt_proj2 = norm_f(Conv2d(1, 128, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0)))
-        self.dwt_conv3 = norm_f(Conv1d(8, 1, 1))
-        self.dwt_proj3 = norm_f(Conv2d(1, 512, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0)))
+        self.dwt_conv1 = weight_norm(Conv1d(2, 1, 1))
+        self.dwt_proj1 = weight_norm(Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0)))
+        self.dwt_conv2 = weight_norm(Conv1d(4, 1, 1))
+        self.dwt_proj2 = weight_norm(Conv2d(1, 128, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0)))
+        self.dwt_conv3 = weight_norm(Conv1d(8, 1, 1))
+        self.dwt_proj3 = weight_norm(Conv2d(1, 512, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0)))
         self.convs = nn.ModuleList([
-            norm_f(Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0))),
-            norm_f(Conv2d(32, 128, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0))),
-            norm_f(Conv2d(128, 512, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0))),
-            norm_f(Conv2d(512, 1024, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0))),
-            norm_f(Conv2d(1024, 1024, (kernel_size, 1), 1, padding=(2, 0))),
+            weight_norm(Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0))),
+            weight_norm(Conv2d(32, 128, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0))),
+            weight_norm(Conv2d(128, 512, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0))),
+            weight_norm(Conv2d(512, 1024, (kernel_size, 1), (stride, 1), padding=(get_padding(5, 1), 0))),
+            weight_norm(Conv2d(1024, 1024, (kernel_size, 1), 1, padding=(2, 0))),
         ])
-        self.conv_post = norm_f(Conv2d(1024, 1, (3, 1), 1, padding=(1, 0)))
+        self.conv_post = weight_norm(Conv2d(1024, 1, (3, 1), 1, padding=(1, 0)))
 
     def forward(self, x):
         fmap = []
@@ -324,7 +323,7 @@ class DiscriminatorP(torch.nn.Module):
         i = 0
         for l in self.convs:
             x = l(x)
-            x = F.leaky_relu(x, LRELU_SLOPE)
+            x = F.leaky_relu(x, LRELU_SLOPE, inplace=True)
 
             fmap.append(x)
             if i == 0:
@@ -352,9 +351,6 @@ class ResWiseMultiPeriodDiscriminator(torch.nn.Module):
             DiscriminatorP(5),
             DiscriminatorP(7),
             DiscriminatorP(11),
-            DiscriminatorP(17),
-            DiscriminatorP(23),
-            DiscriminatorP(37),
         ])
     def forward(self, y, y_hat):
         y_d_rs = []
@@ -373,22 +369,21 @@ class ResWiseMultiPeriodDiscriminator(torch.nn.Module):
 
 
 class DiscriminatorS(torch.nn.Module):
-    def __init__(self, use_spectral_norm=False):
+    def __init__(self):
         super(DiscriminatorS, self).__init__()
-        norm_f = weight_norm if use_spectral_norm == False else spectral_norm
         self.dwt1d = DWT_1D()
-        self.dwt_conv1 = norm_f(Conv1d(2, 128, 15, 1, padding=7))
-        self.dwt_conv2 = norm_f(Conv1d(4, 128, 41, 2, padding=20))
+        self.dwt_conv1 = weight_norm(Conv1d(2, 128, 15, 1, padding=7))
+        self.dwt_conv2 = weight_norm(Conv1d(4, 128, 41, 2, padding=20))
         self.convs = nn.ModuleList([
-            norm_f(Conv1d(1, 128, 15, 1, padding=7)),
-            norm_f(Conv1d(128, 128, 41, 2, groups=4, padding=20)),
-            norm_f(Conv1d(128, 256, 41, 2, groups=16, padding=20)),
-            norm_f(Conv1d(256, 512, 41, 4, groups=16, padding=20)),
-            norm_f(Conv1d(512, 1024, 41, 4, groups=16, padding=20)),
-            norm_f(Conv1d(1024, 1024, 41, 1, groups=16, padding=20)),
-            norm_f(Conv1d(1024, 1024, 5, 1, padding=2)),
+            weight_norm(Conv1d(1, 128, 15, 1, padding=7)),
+            weight_norm(Conv1d(128, 128, 41, 2, groups=4, padding=20)),
+            weight_norm(Conv1d(128, 256, 41, 2, groups=16, padding=20)),
+            weight_norm(Conv1d(256, 512, 41, 4, groups=16, padding=20)),
+            weight_norm(Conv1d(512, 1024, 41, 4, groups=16, padding=20)),
+            weight_norm(Conv1d(1024, 1024, 41, 1, groups=16, padding=20)),
+            weight_norm(Conv1d(1024, 1024, 5, 1, padding=2)),
         ])
-        self.conv_post = norm_f(Conv1d(1024, 1, 3, 1, padding=1))
+        self.conv_post = weight_norm(Conv1d(1024, 1, 3, 1, padding=1))
 
     def forward(self, x):
         fmap = []
@@ -405,7 +400,7 @@ class DiscriminatorS(torch.nn.Module):
         i = 0
         for l in self.convs:
             x = l(x)
-            x = F.leaky_relu(x, LRELU_SLOPE)
+            x = F.leaky_relu(x, LRELU_SLOPE, inplace=True)
             fmap.append(x)
             if i == 0:
                 x = torch.cat([x, x_d1], dim=2)
@@ -420,15 +415,9 @@ class DiscriminatorS(torch.nn.Module):
 
 
 class ResWiseMultiScaleDiscriminator(torch.nn.Module):
-    def __init__(self, use_spectral_norm=False):
+    def __init__(self):
         super(ResWiseMultiScaleDiscriminator, self).__init__()
-        norm_f = weight_norm if use_spectral_norm == False else spectral_norm
-        self.dwt1d = DWT_1D()
-        self.dwt_conv1 = norm_f(Conv1d(2, 1, 1))
-        self.dwt_conv2 = norm_f(Conv1d(4, 1, 1))
         self.discriminators = nn.ModuleList([
-            DiscriminatorS(use_spectral_norm=True),
-            DiscriminatorS(),
             DiscriminatorS(),
         ])
 
@@ -437,30 +426,8 @@ class ResWiseMultiScaleDiscriminator(torch.nn.Module):
         y_d_gs = []
         fmap_rs = []
         fmap_gs = []
-        # DWT 1
-        y_hi, y_lo = self.dwt1d(y)
-        y_1 = self.dwt_conv1(torch.cat([y_hi, y_lo], dim=1))
-        x_d1_high1, x_d1_low1 = self.dwt1d(y_hat)
-        y_hat_1 = self.dwt_conv1(torch.cat([x_d1_high1, x_d1_low1], dim=1))
 
-        # DWT 2
-        x_d2_high1, x_d2_low1 = self.dwt1d(y_hi)
-        x_d2_high2, x_d2_low2 = self.dwt1d(y_lo)
-        y_2 = self.dwt_conv2(torch.cat([x_d2_high1, x_d2_low1, x_d2_high2, x_d2_low2], dim=1))
-
-        x_d2_high1, x_d2_low1 = self.dwt1d(x_d1_high1)
-        x_d2_high2, x_d2_low2 = self.dwt1d(x_d1_low1)
-        y_hat_2 = self.dwt_conv2(torch.cat([x_d2_high1, x_d2_low1, x_d2_high2, x_d2_low2], dim=1))
-
-        for i, d in enumerate(self.discriminators):
-
-            if i == 1:
-                y = y_1
-                y_hat = y_hat_1
-            if i == 2:
-                y = y_2
-                y_hat = y_hat_2
-
+        for d in self.discriminators:
             y_d_r, fmap_r = d(y)
             y_d_g, fmap_g = d(y_hat)
             y_d_rs.append(y_d_r)
@@ -475,13 +442,10 @@ class HolisticMultiDomainDiscriminator(nn.Module):
     """
     Holistic discriminator framework
     """
-    def __init__(self, use_spectral_norm: bool = False, **multi_resolution_cfg):
+    def __init__(self, **multi_resolution_cfg):
         super(HolisticMultiDomainDiscriminator, self).__init__()
 
-        norm_f = weight_norm if use_spectral_norm == False else spectral_norm
-
         self.multi_resolution_disc = MultiResolutionDiscriminator(**multi_resolution_cfg)
-
         self.period_disc = ResWiseMultiPeriodDiscriminator()
         self.scale_disc = ResWiseMultiScaleDiscriminator()
 

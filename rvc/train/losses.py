@@ -90,24 +90,47 @@ def kl_loss(z_p, logs_q, m_p, logs_p, z_mask):
 
     return loss
 
-def kl_loss_clamped(z_p, logs_q, m_p, logs_p, z_mask):
+def discriminator_prls_loss(disc_real_outputs, disc_generated_outputs):
     """
-    Compute the Kullback-Leibler divergence loss.
-    Variant with non-negativity clamp.
+    PRLSGAN Discriminator Loss
+    """
+    loss = 0
+    lambda_rls = 0.4
+    m = 1.0
 
-    Args:
-        z_p (torch.Tensor): Sampled latent variable transformed by the flow [b, h, t_t].
-        logs_q (torch.Tensor): Log variance of the posterior distribution q [b, h, t_t].
-        m_p (torch.Tensor): Mean of the prior distribution p [b, h, t_t].
-        logs_p (torch.Tensor): Log variance of the prior distribution p [b, h, t_t].
-        z_mask (torch.Tensor): Mask for the latent variables [b, h, t_t].
-    """
-    kl = logs_p - logs_q - 0.5 + 0.5 * ((z_p - m_p) ** 2) * torch.exp(-2 * logs_p)
-    kl = (kl * z_mask).sum()
-    loss = kl / z_mask.sum()
-    loss = torch.clamp(loss, min=0.0)
+    for dr, dg in zip(disc_real_outputs, disc_generated_outputs):
+        dr = dr.float()
+        dg = dg.float()
+
+        mse_loss = torch.mean((1 - dr) ** 2) + torch.mean(dg ** 2)
+        rls_loss = torch.mean(torch.clamp(m - (dr - dg), min=0) ** 2)
+
+        loss += mse_loss + (lambda_rls * rls_loss)
 
     return loss
+
+
+def generator_prls_loss(disc_real_outputs, disc_generated_outputs):
+    """
+    PRLSGAN Generator Loss 
+    """
+    loss = 0
+    lambda_rls = 0.4
+    lambda_adv = 4.0
+    m = 1.0
+    
+    for dr, dg in zip(disc_real_outputs, disc_generated_outputs):
+        dr = dr.float()
+        dg = dg.float()
+
+        mse_gen_loss = lambda_adv * torch.mean((1 - dg) ** 2)
+
+        rls_gen_loss = torch.mean(torch.clamp(m - (dg - dr), min=0) ** 2)
+
+        loss += mse_gen_loss + (lambda_rls * rls_gen_loss)
+
+    return loss
+
 
 
 def discriminator_TPRLS_loss(disc_real_outputs, disc_generated_outputs):

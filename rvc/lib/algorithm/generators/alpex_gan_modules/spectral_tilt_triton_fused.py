@@ -26,6 +26,8 @@ def _iir_fwd_kernel(
     H_IN, H_OUT,
     stride_bc, stride_t,
     N_elements, T,
+    HAS_H_IN:  tl.constexpr,
+    HAS_H_OUT: tl.constexpr,
     BLOCK_SIZE: tl.constexpr
 ):
     pid = tl.program_id(0)
@@ -35,7 +37,7 @@ def _iir_fwd_kernel(
     tl.assume(stride_t == 1)
     tl.assume(T > 0)
     
-    if H_IN is not None:
+    if HAS_H_IN:
         h = tl.load(H_IN + offsets, mask=mask, other=0.0)
     else:
         h = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
@@ -52,7 +54,7 @@ def _iir_fwd_kernel(
 
         tl.store(ptrs_y, h, mask=mask)
 
-    if H_OUT is not None:
+    if HAS_H_OUT:
         tl.store(H_OUT + offsets, h, mask=mask)
 
 
@@ -126,9 +128,10 @@ class FusedFastIIR(torch.autograd.Function):
 
         _iir_fwd_kernel[grid](
             x, alpha, y,
-            None, None,
+            alpha, alpha,
             T, 1,
-            N_elements, T
+            N_elements, T,
+            False, False
         )
 
         ctx.save_for_backward(alpha, y)
@@ -184,6 +187,7 @@ def _iir_fwd_long_kernel(
 
     # Carry state across time blocks
     h_prev = tl.zeros([BLOCK_BC], dtype=tl.float32)
+    tl.assume(stride_t == 1)
 
     for t_start in range(0, T, BLOCK_T):
         t_offsets = t_start + tl.arange(0, BLOCK_T)
@@ -199,11 +203,13 @@ def _iir_fwd_long_kernel(
 
         # Apply carry from previous block
         y_chunk = x_scan + a_scan * h_prev[:, None]
-        tl.store(Y + offs, y_chunk, mask=mask)
 
-        # Update carry for next block (Direct load is faster than tl.sum)
+        # Update carry for next block
         last_idx = tl.minimum(BLOCK_T, T - t_start) - 1
-        h_prev = tl.load(Y + bc_offsets * stride_bc + (t_start + last_idx), mask=mask_bc)
+        col_mask = tl.arange(0, BLOCK_T)[None, :] == last_idx
+        h_prev   = tl.sum(tl.where(col_mask, y_chunk, 0.0), axis=1)
+
+        tl.store(Y + offs, y_chunk, mask=mask)
 
 def fast_iir_filter_long(x: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
     B, C, T = x.shape
@@ -244,15 +250,20 @@ def fast_iir_filter_triton(
         y = torch.empty_like(x)
 
         h_out = torch.empty((B, C), device=x.device, dtype=x.dtype)
-        h_in = initial_state.contiguous() if initial_state is not None else None
+
+        has_h_in = initial_state is not None
+        h_in = initial_state.contiguous() if has_h_in else alpha
 
         grid = lambda meta: (triton.cdiv(N_elements, meta['BLOCK_SIZE']),)
+
         _iir_fwd_kernel[grid](
             x, alpha, y,
             h_in, h_out,
             T, 1,
-            N_elements, T
+            N_elements, T,
+            has_h_in, True
         )
+
         return y, h_out
 
     elif mode == "short_train":

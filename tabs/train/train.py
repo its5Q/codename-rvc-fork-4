@@ -272,14 +272,14 @@ fp16_check = None
 
 if microarchitecture_capability_checker():
     # Ampere-Microarchitecture and higher viable:
-    initial_optimizer = "AdamW BF16"
-    initial_optimizer_choices = ["AdamW BF16", "AdamW", "RAdam", "AdamSPD", "Ranger21", "DiffGrad", "Prodigy"]
+    initial_optimizer = "AdamW"
+    initial_optimizer_choices = ["AdamW", "RAdam", "AdamSPD", "Ranger21", "DiffGrad"]
     architecture_choices = ["RVC", "Fork/Applio", "Fork"]
     fp16_check = True
 else:
     # Below Ampere-Microarchitecture viable:
     initial_optimizer = "AdamW"
-    initial_optimizer_choices = ["AdamW", "RAdam", "AdamSPD", "Ranger21", "DiffGrad", "Prodigy"]
+    initial_optimizer_choices = ["AdamW", "RAdam", "AdamSPD", "Ranger21", "DiffGrad"]
     architecture_choices = ["RVC", "Fork/Applio"]
     fp16_check = True
 
@@ -287,7 +287,7 @@ else:
 if fp16_check:
     if check_if_fp16():
         initial_optimizer = "AdamW"
-        initial_optimizer_choices = ["AdamW", "RAdam", "AdamSPD", "Ranger21", "DiffGrad", "Prodigy"]
+        initial_optimizer_choices = ["AdamW", "RAdam", "AdamSPD", "Ranger21", "DiffGrad"]
 
 
 # Train Tab
@@ -339,7 +339,7 @@ def train_tab():
                 vocoder_arch = gr.State("hifi_refine")
                 optimizer = gr.Radio(
                     label="Optimizer",
-                    info="Choose an optimizer used in training: \n ( If unsure, just leave it as it is or try these in this order: AdamW -> RAdam -> AdamSPD. ) \n- **AdamW BF16:** Good and reliable. ( BF16 ver. )  \n- **AdamW:** Normal AdamW. ( **Use the BF16 version unless you train in FP32-only or FP16** ) \n- **RAdam:** Rectified Adam. ( **Can help** with early instability - **Most likely slower convergence** ) \n- **AdamSPD:** Adam with SPD. ( SPD: New weight-decay technique **tailored for fine-tuning.** ) \n- **Ranger21:** AdamW + LookAhead and few more extras. ( **Most likely unstable** ) \n- **DiffGrad:** An optimizer with CNN in mind. ( **Probs** a good AdamW alternative - **For finetuning** ) \n- **Prodigy:** A self-tuning optimizer. Lr will adapt automatically ( **Don't touch the lr** )",
+                    info="Choose an optimizer used in training: \n ( If unsure, just leave it as it is or try these in this order: AdamW -> RAdam -> AdamSPD. ) \n- **AdamW:** Default; Safe and reliable. \n- **RAdam:** Rectified Adam. ( **Can help** with early instability - **Most likely slower convergence** ) \n- **AdamSPD:** Adam with SPD. ( SPD: New weight-decay technique **tailored for fine-tuning.** ) \n- **Ranger21:** AdamW + LookAhead and few more extras. ( **Most likely unstable** ) \n- **DiffGrad:** An optimizer with CNN in mind. ( **Probs** a good AdamW alternative - **For finetuning** )",
                     choices=initial_optimizer_choices,
                     value=initial_optimizer,
                     interactive=True,
@@ -366,7 +366,7 @@ def train_tab():
                 )
                 vocoder = gr.Radio(
                     label="Vocoder",
-                    info="**Vocoder for audio synthesis:** \n \n **HiFi-GAN:** \n- **Arch overview:ㅤHiFi-GAN + Hn-NSF for f0 handling. ( RVC's og vocoder )** \n- **COMPATIBILITY:ㅤAll clients incl. Mainline RVC / W-okada etc.** \n\n**RefineGAN:** \n - **Arch overview:ㅤHiFi-Gan + Hn-NSF + ParallelResBlock + AdaIN** \n- **COMPATIBILITY:ㅤThis Fork or Applio ( As for rt-vc, vonovox beta supports it. )** \n\n**RingFormer:** \n- **Arch overview:ㅤA hybrid Conformer-Based Vocoder + Snake-Beta act. + RingAttention + Hn-NSF** \n- **COMPATIBILITY:ㅤThis Fork ( As for rt-vc, 'Vonovox' supports it. )**  \n\n**PCPH-GAN:** \n- **Arch overview: HiFi-Gan + PCPH prior + SnakeBeta & Silu** \n- **COMPATIBILITY:ㅤThis Fork ( No rt-vc clients support it atm. )** \n\n **NOTES:** \n **( RingFormer Requires min. RTX 30xx [ At least Ampere microarchitecture ] )** \n **( Each Vocoder and it's supported sample rates require appropriate pretrained models. )**",
+                    info="**Vocoder for audio synthesis:** \n \n **HiFi-GAN:** \n- **Arch overview:ㅤHiFi-GAN + Hn-NSF for f0 handling. ( RVC's og vocoder )** \n- **COMPATIBILITY:ㅤAll clients incl. Mainline RVC / W-okada etc.** \n\n**RefineGAN:** \n - **Arch overview:ㅤHiFi-Gan + Hn-NSF + ParallelResBlock + AdaIN** \n- **COMPATIBILITY:ㅤThis Fork or Applio ( As for rt-vc, vonovox beta supports it. )** \n\n**RingFormer:** \n- **Arch overview:ㅤA hybrid Conformer-Based Vocoder + Snake-Beta act. + RingAttention + Hn-NSF** \n- **COMPATIBILITY:ㅤThis Fork ( As for rt-vc, 'Vonovox' supports it. )**  \n\n**ALPEX-GAN:** \n- **Arch overview: HiFi-Gan + FGSS/Cyc-noise excitation + Snake & Silu acts** \n- **COMPATIBILITY:ㅤThis Fork ( No rt-vc clients support it atm. )** \n\n **NOTES:** \n **( RingFormer Requires min. RTX 30xx [ At least Ampere microarchitecture ] )** \n **( Each Vocoder and it's supported sample rates require appropriate pretrained models. )**",
                     choices=["HiFi-GAN"],
                     value="HiFi-GAN",
                     interactive=False,
@@ -683,7 +683,7 @@ def train_tab():
             )
         with gr.Accordion("Advanced Settings for training", open=False):
             with gr.Row():
-                with gr.Column():
+                with gr.Column(scale=0.9):
                     save_only_latest_net_models = gr.Checkbox(
                         label="Save Only Latest G/D",
                         info="Don't disable it unless you need each 'G' and 'D' model saved every epoch. \n( It has it's use for pretrains creation, but not for finetuning. )",
@@ -747,7 +747,66 @@ def train_tab():
                         interactive=True,
                         key='use_deterministic'
                     )
-                with gr.Column():
+                with gr.Column(scale=0.7):
+                    rolling_loss_steps = gr.Slider(
+                        3,
+                        1000,
+                        50,
+                        step=1,
+                        label="Rolling avg loss steps",
+                        info="Pick the steps-interval of rolling-avg logging for losses and grad norms.",
+                        interactive=True,
+                        visible=True,
+                        key='rolling_loss_steps'
+                    )
+                    grad_clip_scheduling = gr.Checkbox(
+                        label="Grad clipping scheduling",
+                        info="Lets you schedule 'clip_grad_norm' clipping. \n For example: Clip to 500 for 1000 steps, then leave unconstrained or at 1000 cap.",
+                        value=False,
+                        interactive=True,
+                        key='grad_clip_scheduling'
+                    )
+                    grad_clip_steps_duration = gr.Number(
+                        label="Clipping duration",
+                        info="Duration of the initial clipping value. \n Measured in steps.",
+                        value=0,
+                        interactive=True,
+                        visible=False,
+                        key='grad_clip_steps_duration'
+                    )
+                    grad_clip_value_g_cap = gr.Number(
+                        label="G grads initial clip",
+                        info="Value to be set for G during the scheduled duration.",
+                        value=0,
+                        interactive=True,
+                        visible=False,
+                        key='grad_clip_value_g_cap'
+                    )
+                    grad_clip_value_d_cap = gr.Number(
+                        label="D grads initial clip",
+                        info="Value to be set for D during the scheduled duration.",
+                        value=0,
+                        interactive=True,
+                        visible=False,
+                        key='grad_clip_value_d_cap'
+                    )
+                    grad_clip_value_g_release = gr.Number(
+                        label="G grads secondary clip",
+                        info="Value to be set for G after scheduled duration",
+                        value=0,
+                        interactive=True,
+                        visible=False,
+                        key='grad_clip_value_g_release'
+                    )
+                    grad_clip_value_d_release = gr.Number(
+                        label="D grads secondary clip",
+                        info="Value to be set for D after scheduled duration",
+                        value=0,
+                        interactive=True,
+                        visible=False,
+                        key='grad_clip_value_d_release'
+                    )
+                with gr.Column(scale=0.9):
                     spectral_loss = gr.Radio(
                         label="Spectral loss",
                         info="- **L1 Mel Loss:** Standard L1 mel spectrogram loss - **Safe default.** \n- **Multi-Scale Mel Loss:** Mel spectrogram loss that utilizes multiple-scales - **Results vary.** \n- **Multi-Res STFT Loss:** STFT Spec. based loss that utilizes multiple-resolutions - **EXPERIMENTAL.** ",
@@ -790,17 +849,6 @@ def train_tab():
                         interactive=True,
                         visible=False,
                         key='kl_annealing_cycle_duration'
-                    )
-                    rolling_loss_steps = gr.Slider(
-                        3,
-                        1000,
-                        50,
-                        step=1,
-                        label="Rolling avg loss steps",
-                        info="Pick the interval ( in steps ) for rolling avg logging for losses and grad norms.",
-                        interactive=True,
-                        visible=True,
-                        key='rolling_loss_steps'
                     )
                     use_tstp = gr.Checkbox(
                         label="Two-Stage Training Protocol",
@@ -979,6 +1027,12 @@ def train_tab():
                     vits2_mode,
                     rolling_loss_steps,
                     use_tstp,
+                    grad_clip_scheduling,
+                    grad_clip_steps_duration,
+                    grad_clip_value_g_cap,
+                    grad_clip_value_d_cap,
+                    grad_clip_value_g_release,
+                    grad_clip_value_d_release,
                     use_custom_lr,
                     custom_lr_g,
                     custom_lr_d,
@@ -1058,6 +1112,9 @@ def train_tab():
             def toggle_visible(checkbox):
                 return {"visible": checkbox, "__type__": "update"}
 
+            def toggle_visible_grad_clip(field):
+                return [{"visible": field, "__type__": "update"} for _ in range(5)]
+
             def toggle_visible_gamma(lr_scheduler):
                 if lr_scheduler in ["exp decay step", "exp decay epoch"]:
                     return {"visible": True, "__type__": "update"}
@@ -1110,7 +1167,7 @@ def train_tab():
                         vocoder_arch_value,
                     )
                 elif architecture == "Fork":
-                    vocoder_arch_value = "ringformer_v2"
+                    vocoder_arch_value = "ALPEX-GAN"
                     return (
                         {
                             "choices": ["24000", "32000", "40000", "48000"],
@@ -1118,10 +1175,10 @@ def train_tab():
                             "value": "48000",
                         },
                         {
-                            "choices": ["RingFormer_v1", "RingFormer_v2", "PCPH-GAN"],
+                            "choices": ["RingFormer_v1", "RingFormer_v2", "ALPEX-GAN"],
                             "__type__": "update",
                             "interactive": True,
-                            "value": "RingFormer_v2",
+                            "value": "ALPEX-GAN",
                         },
                         vocoder_arch_value,
                     )
@@ -1162,8 +1219,8 @@ def train_tab():
                         },
                         vocoder_arch_value,
                     )
-                elif architecture == "Fork" and vocoder == "PCPH-GAN":
-                    vocoder_arch_value = "pcph_gan"
+                elif architecture == "Fork" and vocoder == "ALPEX-GAN":
+                    vocoder_arch_value = "alpex_gan"
                     return (
                         {
                             "choices": ["24000", "32000", "40000", "48000"],
@@ -1201,7 +1258,9 @@ def train_tab():
                 d_pretrained_path, multiple_gpu, training_gpu, use_warmup,
                 warmup_duration, use_custom_lr, custom_lr_g,
                 custom_lr_d, use_kl_annealing, kl_annealing_cycle_duration, vits2_mode,
-                rolling_loss_steps, use_tstp, index_algorithm, use_kl_annealing
+                rolling_loss_steps, use_tstp, grad_clip_scheduling, grad_clip_steps_duration,
+                grad_clip_value_g_cap, grad_clip_value_d_cap, grad_clip_value_g_release,
+                grad_clip_value_d_release, index_algorithm, use_kl_annealing
             ])
 
             def save_training_preset(inputs):
@@ -1331,6 +1390,11 @@ def train_tab():
                 fn=toggle_visible,
                 inputs=[use_kl_annealing],
                 outputs=[kl_annealing_cycle_duration]
+            )
+            grad_clip_scheduling.change(
+                fn=toggle_visible_grad_clip,
+                inputs=[grad_clip_scheduling],
+                outputs=[grad_clip_steps_duration, grad_clip_value_g_cap, grad_clip_value_d_cap, grad_clip_value_g_release, grad_clip_value_d_release]
             )
             lr_scheduler.change(
                 fn=toggle_visible_gamma,

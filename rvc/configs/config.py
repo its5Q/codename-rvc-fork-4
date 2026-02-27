@@ -20,10 +20,10 @@ arch_config_paths = {
         os.path.join("ringformer_v2", "32000.json"),
         os.path.join("ringformer_v2", "24000.json"),
     ],
-    "pcph_gan": [
-        os.path.join("pcph_gan", "48000.json"),
-        os.path.join("pcph_gan", "40000.json"),
-        os.path.join("pcph_gan", "32000.json"),
+    "alpex_gan": [
+        os.path.join("alpex_gan", "48000.json"),
+        os.path.join("alpex_gan", "40000.json"),
+        os.path.join("alpex_gan", "32000.json"),
     ],
 }
 
@@ -47,7 +47,7 @@ class Config:
             self.is_half = False
             print("[CONFIG] Running on CPU, forcing fp32 precision.")
         else:
-            self.is_half = initial_precision == "fp16"  or initial_precision == "bf16"
+            self.is_half = initial_precision == "fp16"
             print(f"[CONFIG] Running on CUDA, training-only precision loaded from config: {initial_precision}")
         self.gpu_name = (
             torch.cuda.get_device_name(int(self.device.split(":")[-1]))
@@ -69,13 +69,12 @@ class Config:
 
 
     def set_precision(self, precision):
-        if precision not in ["fp32", "fp16", "bf16"]:
-            raise ValueError("Invalid precision type. Must be 'fp32', 'fp16' or 'bf16'.")
+        if precision not in ["fp32", "fp16"]:
+            raise ValueError("Invalid precision type. Must be: 'fp32' or 'fp16'")
 
         fp16_run_value = precision == "fp16"
-        bf16_run_value = precision == "bf16"
 
-        self.is_half =  fp16_run_value or bf16_run_value
+        self.is_half = fp16_run_value 
 
         for config_path in arch_config_paths["hifi_refine"]:
             full_config_path = os.path.join("rvc", "configs", config_path)
@@ -83,7 +82,6 @@ class Config:
                 with open(full_config_path, "r") as f:
                     config = json.load(f)
                 config["train"]["fp16_run"] = fp16_run_value
-                config["train"]["bf16_run"] = bf16_run_value
                 with open(full_config_path, "w") as f:
                     json.dump(config, f, indent=4)
             except FileNotFoundError:
@@ -95,7 +93,6 @@ class Config:
                 with open(full_config_path, "r") as f:
                     config = json.load(f)
                 config["train"]["fp16_run"] = fp16_run_value
-                config["train"]["bf16_run"] = bf16_run_value
                 with open(full_config_path, "w") as f:
                     json.dump(config, f, indent=4)
             except FileNotFoundError:
@@ -107,19 +104,17 @@ class Config:
                 with open(full_config_path, "r") as f:
                     config = json.load(f)
                 config["train"]["fp16_run"] = fp16_run_value
-                config["train"]["bf16_run"] = bf16_run_value
                 with open(full_config_path, "w") as f:
                     json.dump(config, f, indent=4)
             except FileNotFoundError:
                 print(f"File not found: {full_config_path}")
 
-        for config_path in arch_config_paths["pcph_gan"]:
+        for config_path in arch_config_paths["alpex_gan"]:
             full_config_path = os.path.join("rvc", "configs", config_path)
             try:
                 with open(full_config_path, "r") as f:
                     config = json.load(f)
                 config["train"]["fp16_run"] = fp16_run_value
-                config["train"]["bf16_run"] = bf16_run_value
                 with open(full_config_path, "w") as f:
                     json.dump(config, f, indent=4)
             except FileNotFoundError:
@@ -138,12 +133,9 @@ class Config:
                 config = json.load(f)
 
             fp16_run_value = config["train"].get("fp16_run", False)
-            bf16_run_value = config["train"].get("bf16_run", False)
 
             if fp16_run_value:
                 precision = "fp16"
-            elif bf16_run_value:
-                precision = "bf16"
             else:
                 precision = "fp32"
             return precision
@@ -162,20 +154,15 @@ class Config:
                 config = json.load(f)
 
             fp16_run_value = config["train"].get("fp16_run", False)
-            bf16_run_value = config["train"].get("bf16_run", False)
 
             if fp16_run_value:
                 precision = "fp16"
-            elif bf16_run_value:
-                precision = "bf16"
             else:
                 precision = "fp32"
 
             runtime_precision = "fp32"
             if self.is_half and fp16_run_value:
                 runtime_precision = "fp16"
-            elif self.is_half and bf16_run_value:
-                runtime_precision = "bf16"
 
             result = (
                 f"Config File Precision: {precision}\n"
@@ -211,13 +198,12 @@ class Config:
         self.gpu_name = torch.cuda.get_device_name(i_device)
 
         # GPUs that must be forced to fp32 ( They either don't support fp16 or the performance is tragic and outweights the pros.
-        fp32_gpus = ["16", "P40", "P10", "1050", "1060", "1070", "1080"]
+        fp32_gpus = ["P10", "P40", "1050", "1060", "1070", "1080"]
 
         if any(gpu_str.lower() in self.gpu_name.lower() for gpu_str in fp32_gpus):
             if self.is_half:
-                print(f"[CONFIG WARNING] Your GPU ({self.gpu_name}) does NOT support fp16 and bf16 precision.")
-                print(f"[CONFIG WARNING] Your GPU ({self.gpu_name}) does NOT support RingFormer architecture.")
-                print("[CONFIG] Forcing precision to fp32.")
+                print(f"[CONFIG WARNING] Your GPU ({self.gpu_name}) does NOT support FP16 precision.")
+                print("[CONFIG] Forcing precision to FP32.")
             self.is_half = False
             self.set_precision("fp32")
 

@@ -145,7 +145,7 @@ def tts_tab():
             )
             seed = gr.Number(
                 label="Inference Seed",
-                info="Specify any seed to be used for inference or leave at '0' for random outputs. ( Classic RVC behavior. )",
+                info="Specify any seed to be used for inference or leave at '0' for random outputs. ( Classic RVC behavior. ) \n **Ensure you don't leave this field empty.**",
                 value=0,
                 interactive=True,
             )

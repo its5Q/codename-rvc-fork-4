@@ -361,16 +361,11 @@ def print_init_setup(
     if rank == 0:
 
         # Precision init msg:
-        if not (config.train.bf16_run or config.train.fp16_run):
+        if not config.train.fp16_run:
             if torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32:
                 print("    ██████  PRECISION: TF32")
             else:
                 print("    ██████  PRECISION: FP32")
-        elif config.train.bf16_run:
-            if torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32:
-                print("    ██████  PRECISION: TF32 / BF16 - AMP")
-            else:
-                print("    ██████  PRECISION: FP32 / BF16 - AMP")
         elif config.train.fp16_run:
             if torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32:
                 print("    ██████  PRECISION: TF32 / FP16 - AMP")

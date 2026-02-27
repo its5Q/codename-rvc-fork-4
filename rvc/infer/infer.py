@@ -1,5 +1,6 @@
 import os
 import sys
+import random
 import soxr
 import time
 import torch
@@ -12,6 +13,7 @@ import noisereduce as nr
 import faiss
 import zstandard as zstd
 import io
+
 from pedalboard import (
     Pedalboard,
     Chorus,
@@ -295,6 +297,18 @@ class VoiceConverter:
                 print(f"Audio split into {len(chunks)} chunks for processing.")
             else:
                 chunks = [audio]
+
+            if seed != 0:
+                torch.manual_seed(seed)
+                torch.cuda.manual_seed_all(seed)
+                print(f"[INFER] Seed specified: Inference is performed in deterministic mode using seed: {seed}")
+            else:
+                print(f"[INFER] Seed unspecified: Inference is performed in randomized mode.")
+                seed = random.randint(0, 2**32 - 1) 
+                random.seed(seed)
+                torch.manual_seed(seed)
+                torch.cuda.manual_seed_all(seed)
+                print(f"[INFER] Randomized seed exposed for reproduction: {seed}")
 
             converted_chunks = []
             for c in chunks:

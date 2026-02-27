@@ -52,3 +52,4 @@ rvc/train/train_optuna.py
 rvc/lib/algorithm/generators/hifigan_prior.py
 DRC.txt
 rvc/train/train - Backup pre logging n misc refactor.py
+tabs/inference/inference - old.py

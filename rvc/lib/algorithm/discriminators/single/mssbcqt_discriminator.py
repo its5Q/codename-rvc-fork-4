@@ -153,7 +153,7 @@ class MultiScaleSubbandCQTDiscriminator(nn.Module):
         self.cfg = kwargs
         # defaults
         self.cfg.update({
-            "cqtd_filters": self.cfg.get("cqtd_filters", 32),
+            "cqtd_filters": self.cfg.get("cqtd_filters", 128),
             "cqtd_max_filters": self.cfg.get("cqtd_max_filters", 1024),
             "cqtd_filters_scale": self.cfg.get("cqtd_filters_scale", 1),
             "cqtd_dilations": self.cfg.get("cqtd_dilations", [1, 2, 4]),

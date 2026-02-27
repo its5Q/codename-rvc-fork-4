@@ -74,10 +74,11 @@ from losses import (
     generator_loss,
     discriminator_loss_v2,
     generator_loss_v2,
+    discriminator_prls_loss,
+    generator_prls_loss,
     HingeAdversarialLoss,
     feature_loss,
     kl_loss,
-    kl_loss_clamped,
     phase_loss
 )
 from mel_processing import (
@@ -120,8 +121,14 @@ kl_annealing_cycle_duration = int(sys.argv[27])
 vits2_mode = strtobool(sys.argv[28])
 rolling_loss_steps = int(sys.argv[29])
 use_tstp = bool(strtobool(sys.argv[30]))
-use_custom_lr = strtobool(sys.argv[31])
-custom_lr_g, custom_lr_d = (float(sys.argv[32]), float(sys.argv[33])) if use_custom_lr else (None, None)
+
+grad_clip_scheduling = bool(strtobool(sys.argv[31]))
+grad_clip_steps_duration = int(sys.argv[32])
+grad_clip_value_g_cap, grad_clip_value_d_cap = (int(sys.argv[33]), int(sys.argv[34]))
+grad_clip_value_g_release, grad_clip_value_d_release = (int(sys.argv[35]), int(sys.argv[36]))
+
+use_custom_lr = strtobool(sys.argv[37])
+custom_lr_g, custom_lr_d = (float(sys.argv[38]), float(sys.argv[39])) if use_custom_lr else (None, None)
 assert not use_custom_lr or (custom_lr_g and custom_lr_d), "Invalid custom LR values."
 
 # Parse command line arguments end region ===========================
@@ -132,16 +139,12 @@ config_save_path = os.path.join(experiment_dir, "config.json")
 dataset_path = os.path.join(experiment_dir, "sliced_audios")
 model_info_path = os.path.join(experiment_dir, "model_info.json")
 
-
 # Load the config from json
 config = load_config_from_json(config_save_path)
 config.data.training_files = os.path.join(experiment_dir, "filelist.txt")
 
-
 # AMP precision / dtype init
-if config.train.bf16_run:
-    train_dtype = torch.bfloat16
-elif config.train.fp16_run: 
+if config.train.fp16_run: 
     train_dtype = torch.float16
 else:
     train_dtype = torch.float32
@@ -169,19 +172,47 @@ pretrain_preview_interval = 100 # Measured in steps.
 
 override_pretrain_lr = False
 new_pretrain_lr = 5e-5 # If you changed it, it needs to be re-adjusted to the most recent lr ~ anytime you resume!
-from_scratch_clip = True
+
+clip_grad_norm_override = False
+clip_grad_norm_override_value_g = 100
+clip_grad_norm_override_value_d = 100
 
 # EXPERIMENTAL
 use_trajectory = False
-
 use_sid_swap = False
 custom_sid = 1
-
+#adversarial_loss = "prls"
 
 ##################################################################
 
 import logging
 logging.getLogger("torch").setLevel(logging.ERROR)
+
+
+class NullDiscriminator(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self._dummy = nn.Parameter(torch.zeros(1), requires_grad=True)
+
+    def forward(self, y: torch.Tensor, y_hat: torch.Tensor):
+        b = y.shape[0]
+        grad_anchor = self._dummy * 0
+        ones = torch.ones(b, device=y.device)  + grad_anchor
+        zeros = torch.zeros(b, device=y.device) + grad_anchor
+        fake_fmap = [grad_anchor.expand(b)]
+        return [ones], [zeros], fake_fmap, fake_fmap
+
+def univhd_project_gamma(net_d, vocoder, rank, global_step):
+    if vocoder != "ALPEX-GAN":
+        return
+    disc = net_d.module if hasattr(net_d, "module") else net_d
+    with torch.no_grad():
+        for d in disc.discriminators:
+            if hasattr(d, "harmonic_filter"):
+                d.harmonic_filter.gamma.clamp_(min=1.0)
+    if rank == 0 and global_step % 100 == 0:
+        print(f"[UnivHD] gamma: {disc.discriminators[-1].harmonic_filter.gamma.item():.6f}")
+
 
 class EarlyStopSignalHandler:
     def __init__(self):
@@ -319,13 +350,21 @@ def get_d_model(config, vocoder, use_checkpointing):
             use_checkpointing=use_checkpointing,
             **dict(config.mrd)
         )
-    elif vocoder == "PCPH-GAN":
-        from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_Combined
-        return MPD_MSD_MRD_Combined(
-            config.model.use_spectral_norm,
+    elif vocoder == "ALPEX-GAN":
+         # MPD + MSD + MRD + UnivHD ( trials for univhd integration. )
+        from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_UnivHD_Combined
+        return MPD_MSD_MRD_UnivHD_Combined(
+            sample_rate=config.data.sample_rate,
+            use_spectral_norm=config.model.use_spectral_norm,
             use_checkpointing=use_checkpointing,
             **dict(config.mrd)
         )
+        # from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_Combined
+        # return MPD_MSD_MRD_Combined(
+            # config.model.use_spectral_norm,
+            # use_checkpointing=use_checkpointing,
+            # **dict(config.mrd)
+        # )
     elif vocoder == "RefineGAN":
         from rvc.lib.algorithm.discriminators.multi import MPD_MSD_MRD_Combined_RefineGan
         # Trimmed MPD + MSD + MRD ( unified )
@@ -414,11 +453,6 @@ def get_optimizers(
     if optimizer_choice == "AdamW":
         optim_g = torch.optim.AdamW(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g, fused=True)
         optim_d = torch.optim.AdamW(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d, fused=True)
-
-    elif optimizer_choice == "AdamW BF16":
-        from optimi import AdamW as AdamW_BF16
-        optim_g = AdamW_BF16(filter(lambda p: p.requires_grad, net_g.parameters()), **common_args_g, kahan_sum=True, foreach=True)
-        optim_d = AdamW_BF16(filter(lambda p: p.requires_grad, net_d.parameters()), **common_args_d, kahan_sum=True, foreach=True)
 
     elif optimizer_choice == "RAdam":
         optim_g = torch.optim.RAdam(filter(lambda p: p.requires_grad, net_g.parameters()), **radam_args_g)
@@ -600,9 +634,6 @@ def prepare_schedulers(optim_g, optim_d, use_warmup, warmup_duration, use_lr_sch
                 param_group['initial_lr'] = param_group['lr']
 
     if use_lr_scheduler:
-        if lr_scheduler == "exp decay step":
-            exp_decay_gamma_step = exp_decay_gamma ** (1.0 / num_batches_per_epoch)
-
         if lr_scheduler == "exp decay epoch":
             # Exponential decay lr scheduler per epoch
             scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=exp_decay_gamma, last_epoch=scheduler_resume_epoch)
@@ -617,8 +648,6 @@ def prepare_schedulers(optim_g, optim_d, use_warmup, warmup_duration, use_lr_sch
                     super().__init__(optimizer, lr_lambda=lambda step: self.gamma, last_epoch=last_epoch)
             scheduler_g = DynamicStepLR(optim_g, gamma=exp_decay_gamma_step, last_epoch=scheduler_resume_step)
             scheduler_d = DynamicStepLR(optim_d, gamma=exp_decay_gamma_step, last_epoch=scheduler_resume_step)
-
-
 
         elif lr_scheduler == "cosine annealing epoch":
             # Cosine annealing lr scheduler per epoch
@@ -1060,7 +1089,7 @@ def training_loop(
     if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
         avg_rolling_cache["loss_sd"] = deque(maxlen=rolling_loss_steps)
 
-    use_amp = (config.train.bf16_run or config.train.fp16_run) and device.type == "cuda"
+    use_amp = config.train.fp16_run and device.type == "cuda"
 
     # Partial resume aligning
     current_epoch_start_step = (epoch - 1) * len(train_loader)
@@ -1076,52 +1105,49 @@ def training_loop(
                 continue
 
             global_step += 1
-
             if not from_scratch:
                 num_batches_in_epoch += 1
 
-            if from_scratch_clip:
-                if global_step < 15000:
-                    clip_value = 200
+            # Clip scheduling
+            if not clip_grad_norm_override:
+                if grad_clip_scheduling and grad_clip_steps_duration > 0:
+                    if global_step < grad_clip_steps_duration:
+                        # Clip
+                        grad_clip_value_g = grad_clip_value_g_cap if grad_clip_value_g_cap != 0 else float("inf")
+                        grad_clip_value_d = grad_clip_value_d_cap if grad_clip_value_d_cap != 0 else float("inf")
+                    else:
+                        # Release ( or 2nd clip phase )
+                        grad_clip_value_g = grad_clip_value_g_release if grad_clip_value_g_release != 0 else float("inf")
+                        grad_clip_value_d = grad_clip_value_d_release if grad_clip_value_d_release != 0 else float("inf")
                 else:
-                    clip_value = 300
+                    grad_clip_value_g = grad_clip_value_d = float("inf") # Default: No Clipping
             else:
-                clip_value = float("inf")
+                grad_clip_value_g = clip_grad_norm_override_value_g
+                grad_clip_value_d = clip_grad_norm_override_value_d
 
-
+            # Device handling
             if device.type == "cuda":
                 info = [tensor.cuda(device_id, non_blocking=True) for tensor in info]
             elif device.type != "cuda":
                 info = [tensor.to(device) for tensor in info]
-            (
-                phone,
-                phone_lengths,
-                pitch,
-                pitchf,
-                spec,
-                spec_lengths,
-                y,
-                y_lengths,
-                sid,
-            ) = info
+
+            # Tuple unpacking
+            (phone, phone_lengths, pitch, pitchf, spec, spec_lengths, y, y_lengths, sid) = info
 
             # Generator forward pass:
             with autocast(device_type="cuda", enabled=use_amp, dtype=train_dtype):
                 model_output = net_g(phone, phone_lengths, pitch, pitchf, spec, spec_lengths, sid)
-                # Unpacking:
+
+                # Generator unpacking:
                 if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
-                    y_hat, ids_slice, x_mask, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q), (mag, phase) = (model_output)
+                    y_hat, ids_slice, x_mask, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q), (mag, _) = (model_output)
                 else:
                     y_hat, ids_slice, x_mask, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q) = (model_output)
 
                 # Slice the original waveform ( y ) to match the generated slice:
-                y = commons.slice_segments(
-                    y,
-                    ids_slice * config.data.hop_length,
-                    config.train.segment_size,
-                    dim=3,
-                )
+                y = commons.slice_segments(y, ids_slice * config.data.hop_length, config.train.segment_size, dim=3)
 
+            # RingFormer related
             if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                 reshaped_y = y.view(-1, y.size(-1))
                 reshaped_y_hat = y_hat.view(-1, y_hat.size(-1))
@@ -1142,6 +1168,9 @@ def training_loop(
                 elif adversarial_loss == "hinge":
                     loss_fake, loss_real = fn_hinge_loss(y_d_hat_g, y_d_hat_r)
                     loss_disc = loss_fake + loss_real
+                elif adversarial_loss == "prls":
+                    loss_disc = discriminator_prls_loss(y_d_hat_r, y_d_hat_g)
+
 
             # Discriminator backward and update:
             optim_d.zero_grad(set_to_none=True)
@@ -1149,12 +1178,14 @@ def training_loop(
                 gradscaler.scale(loss_disc).backward() # Scale and backward of the loss
                 gradscaler.unscale_(optim_d) # Unscale
                 scale = gradscaler.get_scale() # To retrieve current gradscaler's scaling
-                grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=clip_value) # Grad clipping
+                grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=grad_clip_value_d) # Grad clipping
                 gradscaler.step(optim_d) # Optim step
+                univhd_project_gamma(net_d, vocoder, rank, global_step) # univhd safety constraint
             else:
                 loss_disc.backward() # Loss backward
-                grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=clip_value) # Grad clipping
+                grad_norm_d = torch.nn.utils.clip_grad_norm_(net_d.parameters(), max_norm=grad_clip_value_d) # Grad clipping
                 optim_d.step() # Optim step
+                univhd_project_gamma(net_d, vocoder, rank, global_step) # univhd safety constraint
 
             # Run discriminator on generated output
             with autocast(device_type="cuda", enabled=use_amp, dtype=train_dtype):
@@ -1184,6 +1215,8 @@ def training_loop(
                     loss_adv = generator_loss_v2(y_d_hat_g, y_d_hat_r_detached)
                 elif adversarial_loss == "hinge":
                     loss_adv = fn_hinge_loss(y_d_hat_g)
+                elif adversarial_loss == "prls":
+                    loss_adv = generator_prls_loss(y_d_hat_g, y_d_hat_r)
 
                 # Kl annealing handler
                 if use_kl_annealing:
@@ -1192,7 +1225,7 @@ def training_loop(
                 else:
                     kl_beta = 1.0
 
-                # RingFormer related;  Phase, Magnitude and SD:
+                # RingFormer related
                 if vocoder in ["RingFormer_v1", "RingFormer_v2"]:
                     loss_magnitude = torch.nn.functional.l1_loss(mag, target_magnitude)
                     loss_phase = phase_loss(y_stft, y_hat_stft)
@@ -1217,13 +1250,13 @@ def training_loop(
             if train_dtype == torch.float16:
                 gradscaler.scale(loss_gen_total).backward() # Scale and backward of the loss
                 gradscaler.unscale_(optim_g) # Unscale
-                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=clip_value) # Grad clipping
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=grad_clip_value_g) # Grad clipping
                 gradscaler.step(optim_g) # Optim step
                 gradscaler.update() # Scaler update, to prepare the scaling for the next iteration
                 skip_lr_sched = (scale > gradscaler.get_scale())
             else:
                 loss_gen_total.backward() # Loss backward
-                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=clip_value) # Grad clipping
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(net_g.parameters(), max_norm=grad_clip_value_g) # Grad clipping
                 optim_g.step() # Optim step
                 skip_lr_sched = False
 

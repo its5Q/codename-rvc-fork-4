@@ -176,10 +176,6 @@ def output_path_fn(input_audio_path):
 
 
 def change_choices(model):
-    if model:
-        speakers = get_speakers_id(model)
-    else:
-        speakers = [0]
     names = [
         os.path.join(root, file)
         for root, _, files in os.walk(model_root_relative, topdown=False)
@@ -210,22 +206,8 @@ def change_choices(model):
         {"choices": sorted(names), "__type__": "update"},
         {"choices": sorted(indexes_list), "__type__": "update"},
         {"choices": sorted(audio_paths), "__type__": "update"},
-        {
-            "choices": (
-                sorted(speakers)
-                if speakers is not None and isinstance(speakers, (list, tuple))
-                else [0]
-            ),
-            "__type__": "update",
-        },
-        {
-            "choices": (
-                sorted(speakers)
-                if speakers is not None and isinstance(speakers, (list, tuple))
-                else [0]
-            ),
-            "__type__": "update",
-        },
+        {"__type__": "update"},
+        {"__type__": "update"},
     )
 
 
@@ -274,10 +256,10 @@ def save_to_wav2(upload_audio):
 
 
 def delete_outputs():
-    gr.Info(f"Inference outputs cleared!")
+    gr.Info("Inference outputs cleared!")
     for root, _, files in os.walk(audio_root_relative, topdown=False):
         for name in files:
-            if name.endswith(tuple(sup_audioext)) and name.__contains__("_output"):
+            if name.endswith(tuple(sup_audioext)) and "_output" in name:
                 os.remove(os.path.join(root, name))
 
 def match_index(model_file_value):
@@ -523,14 +505,14 @@ def inference_tab():
                 )
                 seed = gr.Number(
                     label="Inference Seed",
-                    info="Specify any seed to be used for inference or leave at '0' for random outputs. ( Classic RVC behavior. )",
+                    info="Specify any seed to be used for inference or leave at '0' for random outputs. ( Classic RVC behavior. ) \n **Ensure you don't leave this field empty.**",
                     value=0,
                     interactive=True,
                 )
                 sid = gr.Dropdown(
                     label="Speaker ID",
                     info="Select the speaker ID used for inference. \nApplicable only for multi-speaker models.",
-                    choices=get_speakers_id(model_file.value),
+                    choices=[0],
                     value=0,
                     interactive=True,
                 )
@@ -1134,7 +1116,7 @@ def inference_tab():
                 sid_batch = gr.Dropdown(
                     label="Speaker ID",
                     info="Select the speaker ID to use for the conversion.",
-                    choices=get_speakers_id(model_file.value),
+                    choices=[0],
                     value=0,
                     interactive=True,
                 )

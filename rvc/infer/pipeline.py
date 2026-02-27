@@ -1,7 +1,8 @@
 import os
+import sys
+import random
 import gc
 import re
-import sys
 import torch
 import torch.nn.functional as F
 import torchcrepe
@@ -419,6 +420,10 @@ class Pipeline:
             seed: Seed for randomization of noise.
             loaded_index: A pre-loaded FAISS index object.
         """
+
+        if seed == 0:
+            seed = random.randint(1, 2**32 - 1)
+
         # Index handling
         index = big_npy = None
         if loaded_index is not None and index_rate > 0:
