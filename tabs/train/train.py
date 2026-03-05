@@ -452,6 +452,14 @@ def train_tab():
             """
             )
             with gr.Row():
+                dataset_format = gr.Radio(
+                    label="Dataset Format",
+                    info="Controls which format will be used for storing sliced audio files. Use FLAC if you are running low on storage space, but be aware that it introduces miniscule quantization noise (which shouldn't affect the model in any noticeable way, but not recommended if you want to process the sliced audio files later).",
+                    choices=["WAV", "FLAC"],
+                    value="WAV",
+                    interactive=True,
+                    key='dataset_format'
+                )
                 loading_resampling = gr.Radio(
                     label="Resampling & Loading Handler",
                     info="- **librosa** - Uses SoX resampler \n ( SoXr set to VHQ by default. ).\n- **ffmpeg** -  Uses SW resampler \n ( Windowed Sinc filter with Blackman-Nuttall window ) \n\n **Both are viable choices!** \n **( But I'd actually go with Sinc / FFmpeg. )**",
@@ -562,7 +570,8 @@ def train_tab():
                     overlap_len,
                     normalization_mode,
                     loading_resampling,
-                    use_smart_cutter
+                    use_smart_cutter,
+                    dataset_format
                 ],
                 outputs=[preprocess_output_info],
             )
@@ -1240,9 +1249,9 @@ def train_tab():
                 architecture, optimizer, adversarial_loss, vocoder, sampling_rate, cpu_threads, extract_gpu,
 
                 # Preprocessing
-                dataset_path, loading_resampling, use_smart_cutter, normalization_mode, cut_preprocess,
-                chunk_len, overlap_len, process_effects,
-                noise_reduction, clean_strength,
+                dataset_path, dataset_format, loading_resampling, use_smart_cutter,
+                normalization_mode, cut_preprocess, chunk_len, overlap_len,
+                process_effects, noise_reduction, clean_strength,
 
                 # Feature extract
                 f0_method, embedder_model, include_mutes,

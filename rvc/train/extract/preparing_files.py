@@ -27,12 +27,11 @@ def generate_filelist(
     f0_dir = os.path.join(model_path, "f0")
     f0nsf_dir = os.path.join(model_path, "f0_voiced")
 
-    gt_wavs_files = set(name.split(".")[0] for name in os.listdir(gt_wavs_dir))
-    feature_files = set(name.split(".")[0] for name in os.listdir(feature_dir))
+    gt_wavs_files = sorted(os.listdir(gt_wavs_dir), key=lambda x: x.split(".")[0])
+    feature_files = sorted(os.listdir(feature_dir), key=lambda x: x.split(".")[0])
 
-    f0_files = set(name.split(".")[0] for name in os.listdir(f0_dir))
-    f0nsf_files = set(name.split(".")[0] for name in os.listdir(f0nsf_dir))
-    names = gt_wavs_files & feature_files & f0_files & f0nsf_files
+    f0_files = sorted(os.listdir(f0_dir), key=lambda x: x.split(".")[0])
+    f0nsf_files = sorted(os.listdir(f0nsf_dir), key=lambda x: x.split(".")[0])
 
     options = []
 
@@ -49,12 +48,12 @@ def generate_filelist(
     
     vocoder_arch = vocoder_arch
 
-    for name in names:
-        sid = name.split("_")[0]
+    for gt_wavs_file, feature_file, f0_file, f0nsf_file in zip(gt_wavs_files, feature_files, f0_files, f0nsf_files, strict=True):
+        sid = gt_wavs_file.split("_")[0]
         if sid not in sids:
             sids.append(sid)
         options.append(
-            f"{os.path.join(gt_wavs_dir, name)}.wav|{os.path.join(feature_dir, name)}.npy|{os.path.join(f0_dir, name)}.wav.npy|{os.path.join(f0nsf_dir, name)}.wav.npy|{sid}"
+            f"{os.path.join(gt_wavs_dir, gt_wavs_file)}|{os.path.join(feature_dir, feature_file)}|{os.path.join(f0_dir, f0_file)}|{os.path.join(f0nsf_dir, f0nsf_file)}|{sid}"
         )
 
     if include_mutes > 0:

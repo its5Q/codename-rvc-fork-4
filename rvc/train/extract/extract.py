@@ -204,7 +204,7 @@ if __name__ == "__main__":
         json.dump(data, f, indent=4)
 
     files = []
-    for file in glob.glob(os.path.join(wav_path, "*.wav")):
+    for file in glob.glob(os.path.join(wav_path, "*")):
         file_name = os.path.basename(file)
         file_info = [
             file,
