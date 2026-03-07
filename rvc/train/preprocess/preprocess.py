@@ -12,6 +12,7 @@ import librosa
 import multiprocessing
 import shutil
 import soundfile as sf
+import io
 import soxr
 from fractions import Fraction
 
@@ -42,6 +43,7 @@ ALPHA = 0.75
 HIGH_PASS_CUTOFF = 48
 SAMPLE_RATE_16K = 16000
 RES_TYPE = "soxr_vhq"
+FLAC_COMPRESSION_LEVEL = 5 / 8 # FLAC level 5, libsndfile uses 0.0 - 1.0 range for compression level
 
 
 def secs_to_samples(secs, sr):
@@ -52,6 +54,35 @@ def secs_to_samples(secs, sr):
         raise ValueError(f"{secs}s × {sr}Hz is not an integer sample count")
     return frac.numerator
 
+def save_audio(path: str, name: str, sample_rate: int, format: str, audio: np.ndarray):
+    """
+    Save audio to file.
+    Args:
+        path: Path to a directory where the audio file will be saved.
+        name: Name of the audio file without the extension.
+        sample_rate: Sample rate of the audio file.
+        format: Format of the audio file (WAV or FLAC).
+        audio: Audio data array.
+    """
+    if format.lower() == "flac":
+        memory_file = io.BytesIO()
+        sf.write(
+            memory_file,
+            audio,
+            sample_rate,
+            format="FLAC",
+            subtype="PCM_24",
+            compression_level=FLAC_COMPRESSION_LEVEL
+        )
+        memory_file.seek(0)
+        with open(os.path.join(path, f"{name}.flac"), "wb") as f:
+            f.write(memory_file.read())
+    else:
+        wavfile.write(
+            os.path.join(path, f"{name}.wav"),
+            sample_rate,
+            audio.astype(np.float32),
+        )
 
 class PreProcess:
     def __init__(self, sr: int, exp_dir: str):
@@ -80,13 +111,11 @@ class PreProcess:
         idx0: int,
         idx1: int,
         loading_resampling: str,
+        dataset_format: str
     ):
         # Saving slices for GroundTruth ( 'sliced_audios' dir )
-        wavfile.write(
-            os.path.join(self.gt_wavs_dir, f"{sid}_{idx0}_{idx1}.wav"),
-            self.sr,
-            audio.astype(np.float32),
-        )
+        save_audio(self.gt_wavs_dir, f"{sid}_{idx0}_{idx1}", self.sr, dataset_format, audio)
+
         # Resampling of slices for wavs16k ( 'sliced_audios_16k' dir )
         if loading_resampling == "librosa":
             chunk_16k = librosa.resample(
@@ -96,12 +125,9 @@ class PreProcess:
             chunk_16k = load_audio_ffmpeg(
                 audio, sample_rate=SAMPLE_RATE_16K, source_sr=self.sr,
             )
+
         # Saving slices for 16khz ( 'sliced_audios_16k' dir )
-        wavfile.write(
-            os.path.join(self.wavs16k_dir, f"{sid}_{idx0}_{idx1}.wav"),
-            SAMPLE_RATE_16K,
-            chunk_16k.astype(np.float32),
-        )
+        save_audio(self.wavs16k_dir, f"{sid}_{idx0}_{idx1}", SAMPLE_RATE_16K, dataset_format, chunk_16k)
 
 
     def simple_cut(
@@ -112,6 +138,7 @@ class PreProcess:
         chunk_len: float,
         overlap_len: float,
         loading_resampling: str,
+        dataset_format: str
     ):
         chunk_len_smpl = secs_to_samples(chunk_len, self.sr)
         stride = chunk_len_smpl - secs_to_samples(overlap_len, self.sr)
@@ -132,9 +159,7 @@ class PreProcess:
                     break
 
             # Saving slices
-            wavfile.write(
-                os.path.join(self.gt_wavs_dir, f"{sid}_{idx0}_{slice_idx}.wav"),
-                self.sr, chunk.astype(np.float32))
+            save_audio(self.gt_wavs_dir, f"{sid}_{idx0}_{slice_idx}", self.sr, dataset_format, chunk)
 
             # Resampling of slices for wavs16k ( 'sliced_audios_16k' dir )
             if loading_resampling == "librosa":
@@ -146,9 +171,7 @@ class PreProcess:
                     chunk, sample_rate=SAMPLE_RATE_16K, source_sr=self.sr,
                 )
             # Saving slices for 16khz ( 'sliced_audios_16k' dir )
-            wavfile.write(
-                os.path.join(self.wavs16k_dir, f"{sid}_{idx0}_{slice_idx}.wav"),
-                SAMPLE_RATE_16K, chunk_16k.astype(np.float32))
+            save_audio(self.wavs16k_dir, f"{sid}_{idx0}_{slice_idx}", SAMPLE_RATE_16K, dataset_format, chunk_16k)
 
             slice_idx += 1
             i += stride
@@ -165,6 +188,7 @@ class PreProcess:
         chunk_len: float,
         overlap_len: float,
         loading_resampling: str,
+        dataset_format: str
     ):
         audio_length = 0
         try:
@@ -186,9 +210,9 @@ class PreProcess:
 
             # Slicing approach
             if cut_preprocess == "Skip":
-                self.process_audio_segment(audio, sid, idx0, 0, loading_resampling)
+                self.process_audio_segment(audio, sid, idx0, 0, loading_resampling, dataset_format)
             elif cut_preprocess == "Simple":
-                self.simple_cut(audio, sid, idx0, chunk_len, overlap_len, loading_resampling)
+                self.simple_cut(audio, sid, idx0, chunk_len, overlap_len, loading_resampling, dataset_format)
             elif cut_preprocess == "Automatic":
                 idx1 = 0
                 for audio_segment in self.slicer.slice(audio):
@@ -198,11 +222,11 @@ class PreProcess:
                         i += 1
                         if len(audio_segment[start:]) > (PERCENTAGE + OVERLAP) * self.sr:
                             tmp_audio = audio_segment[start : start + int(PERCENTAGE * self.sr)]
-                            self.process_audio_segment(tmp_audio, sid, idx0, idx1, loading_resampling)
+                            self.process_audio_segment(tmp_audio, sid, idx0, idx1, loading_resampling, dataset_format)
                             idx1 += 1
                         else:
                             tmp_audio = audio_segment[start:]
-                            self.process_audio_segment(tmp_audio, sid, idx0, idx1, loading_resampling)
+                            self.process_audio_segment(tmp_audio, sid, idx0, idx1, loading_resampling, dataset_format)
                             idx1 += 1
                             break
         except Exception as e:
@@ -224,6 +248,7 @@ def _process_audio_worker(args):
         chunk_len,
         overlap_len,
         loading_resampling,
+        dataset_format
     ) = args
     pp = PreProcess(sr, exp_dir)
     return pp.process_audio(
@@ -237,6 +262,7 @@ def _process_audio_worker(args):
         chunk_len,
         overlap_len,
         loading_resampling,
+        dataset_format
     )
 
 def _process_and_save_worker(args):
@@ -253,7 +279,7 @@ def _process_and_save_worker(args):
         else:
             gt_normalized = gt_audio
 
-        wavfile.write(gt_path, gt_sr, gt_normalized.astype(np.float32))
+        save_audio(gt_wavs_dir, file_name.split(".")[0], gt_sr, file_name.split(".")[1], gt_normalized)
 
         # Process 16k audio
         k16_path = os.path.join(wavs16k_dir, file_name)
@@ -266,8 +292,7 @@ def _process_and_save_worker(args):
         else:
             k16_normalized = k16_audio
 
-        wavfile.write(k16_path, k16_sr, k16_normalized.astype(np.float32))
-
+        save_audio(wavs16k_dir, file_name.split(".")[0], k16_sr, file_name.split(".")[1], k16_normalized)
     except Exception as e:
         logger.error(f"Error classic normalizing {file_name}: {e}")
         raise e
@@ -365,7 +390,8 @@ def preprocess_training_set(
     overlap_len: float,
     normalization_mode: str,
     loading_resampling: str,
-    use_smart_cutter: bool
+    use_smart_cutter: bool,
+    dataset_format: str
 ):
     start_time = time.time()
 
@@ -469,6 +495,7 @@ def preprocess_training_set(
                     chunk_len,
                     overlap_len,
                     loading_resampling,
+                    dataset_format
                 )
                 for idx, f_path in enumerate(current_batch_paths)
             ]
@@ -494,7 +521,7 @@ def preprocess_training_set(
         gt_wavs_dir = os.path.join(exp_dir, "sliced_audios")
         wavs16k_dir = os.path.join(exp_dir, "sliced_audios_16k")
 
-        audio_files = [f for f in os.listdir(gt_wavs_dir) if f.endswith(".wav")]
+        audio_files = [f for f in os.listdir(gt_wavs_dir) if f.endswith((".wav", ".flac"))]
         audio_files.sort()
 
         arg_list = [(file_name, gt_wavs_dir, wavs16k_dir) for file_name in audio_files]
@@ -507,8 +534,8 @@ def preprocess_training_set(
                 f"on {format_duration(total_audio_length)} of audio.")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 14:
-        print("Usage: python preprocess.py <experiment_directory> <input_root> <sample_rate> <num_processes or 'none'> <cut_preprocess> <process_effects> <noise_reduction> <reduction_strength> <chunk_len> <overlap_len> <normalization_mode> <loading_resampling> <use_smart_cutter>")
+    if len(sys.argv) < 15:
+        print("Usage: python preprocess.py <experiment_directory> <input_root> <sample_rate> <num_processes or 'none'> <cut_preprocess> <process_effects> <noise_reduction> <reduction_strength> <chunk_len> <overlap_len> <normalization_mode> <loading_resampling> <use_smart_cutter> <dataset_format>")
         sys.exit(1)
     experiment_directory = str(sys.argv[1])
     input_root = str(sys.argv[2])
@@ -529,6 +556,7 @@ if __name__ == "__main__":
     normalization_mode = str(sys.argv[11])
     loading_resampling = str(sys.argv[12])
     use_smart_cutter = bool(strtobool(sys.argv[13]))
+    dataset_format = str(sys.argv[14])
 
     preprocess_training_set(
         input_root,
@@ -543,5 +571,6 @@ if __name__ == "__main__":
         overlap_len,
         normalization_mode,
         loading_resampling,
-        use_smart_cutter
+        use_smart_cutter,
+        dataset_format
     )

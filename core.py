@@ -438,7 +438,8 @@ def run_preprocess_script(
     overlap_len: float,
     normalization_mode: str = "post_peak",
     loading_resampling: str = "librosa",
-    use_smart_cutter: bool = False
+    use_smart_cutter: bool = False,
+    dataset_format: str = "WAV"
 ):
     preprocess_script_path = os.path.join("rvc", "train", "preprocess", "preprocess.py")
     command = [
@@ -459,7 +460,8 @@ def run_preprocess_script(
                 overlap_len,
                 normalization_mode,
                 loading_resampling,
-                use_smart_cutter
+                use_smart_cutter,
+                dataset_format
             ],
         ),
     ]
