@@ -11,11 +11,11 @@ set address="http://%host%:%port%"
 :: display the address in the command prompt
 echo %address%
 
-:: ask user to key in the saved model directory, example "C:\tmp\mnist_model"
-set /p UserInputPath=Key in model saved directory:
+:: show the dragged folder path
+echo %1
 
 ::start tensorboard
-start "" tensorboard --logdir="%UserInputPath%" --host="%host%" --port=25565 
+start "" tensorboard --logdir=%1 --host="%host%" --port=25565 
 
 TIMEOUT /T 3 /NOBREAK >nul
 
