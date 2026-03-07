@@ -538,7 +538,6 @@ def run_train_script(
     spectral_loss: str = "L1 Mel Loss",
     lr_scheduler: str = "exp decay step",
     exp_decay_gamma: str = "0.999875",
-    use_validation: bool = True,
     use_kl_annealing: bool = False,
     kl_annealing_cycle_duration: int = 3,
     vits2_mode: bool = False,
@@ -561,15 +560,10 @@ def run_train_script(
         from rvc.lib.tools.pretrained_selector import pretrained_selector
 
         if custom_pretrained == False:
-            pg, pd = pretrained_selector(
-                str(vocoder), int(sample_rate)
-            )
+            pg, pd = pretrained_selector(str(vocoder), int(sample_rate))
         else:
-            if g_pretrained_path is None or d_pretrained_path is None:
-                raise ValueError(
-                    "Please provide the path to the pretrained G and D models."
-                )
-            pg, pd = g_pretrained_path, d_pretrained_path
+            pg = g_pretrained_path if g_pretrained_path is not None else ""
+            pd = d_pretrained_path if d_pretrained_path is not None else ""
     else:
         pg, pd = "", ""
 
@@ -604,7 +598,6 @@ def run_train_script(
                 spectral_loss,
                 lr_scheduler,
                 exp_decay_gamma,
-                use_validation,
                 use_kl_annealing,
                 kl_annealing_cycle_duration,
                 vits2_mode,
@@ -2190,13 +2183,6 @@ def parse_arguments():
         default="0.999875",
     )
     train_parser.add_argument(
-        "--use_validation",
-        type=lambda x: bool(strtobool(x)),
-        choices=[True, False],
-        help="Whether to use hold-out validation",
-        default=False,
-    )
-    train_parser.add_argument(
         "--use_kl_annealing",
         type=lambda x: bool(strtobool(x)),
         choices=[True, False],
@@ -2609,7 +2595,6 @@ def main():
                 spectral_loss=args.spectral_loss,
                 lr_scheduler=args.lr_scheduler,
                 exp_decay_gamma=args.exp_decay_gamma,
-                use_validation=args.use_validation,
                 vits2_mode=args.vits2_mode,
                 rolling_loss_steps=args.rolling_loss_steps,
                 use_tstp=args.use_tstp,

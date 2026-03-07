@@ -147,7 +147,7 @@ def plot_spectrogram_to_numpy(spectrogram):
         plt.switch_backend("Agg")
         MATPLOTLIB_FLAG = True
 
-    fig, ax = plt.subplots(figsize=(10, 2))
+    fig, ax = plt.subplots(figsize=(10, 2.5))
     im = ax.imshow(spectrogram, aspect="auto", origin="lower", interpolation="none")
     plt.colorbar(im, ax=ax)
     plt.xlabel("Frames")
@@ -155,8 +155,9 @@ def plot_spectrogram_to_numpy(spectrogram):
     plt.tight_layout()
 
     fig.canvas.draw()
-    data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    data = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+    data = data.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+    data = data[:, :, :3]
     plt.close(fig)
     return data
 
@@ -347,7 +348,6 @@ def print_init_setup(
     use_warmup,
     config,
     optimizer_choice,
-    use_validation,
     lr_scheduler,
     exp_decay_gamma,
     use_kl_annealing,
@@ -408,29 +408,28 @@ def print_init_setup(
         else:
             print("    ██████  Vits mode: vits-based (Default RVC)")
 
-        # Validation check:
-        print(f"    ██████  Using Validation: {use_validation}")
-
         # LR scheduler check:
         if lr_scheduler == "exp decay":
             print(f"    ██████  lr scheduler: exponential lr decay with gamma of: {exp_decay_gamma}")
         elif lr_scheduler == "cosine annealing":
             print(f"    ██████  lr scheduler: cosine annealing")
 
+        # Warmup
         if use_warmup:
             print(f"    ██████  Warmup Enabled for: {warmup_duration} epochs.")
 
+        # Kl annealing
         if use_kl_annealing:
             print(f"    ██████  KL loss annealing enabled with cycle duration of: {kl_annealing_cycle_duration} epochs.")
 
+        # Tstp
         if use_tstp:
             print(f"    ██████  Two-Stage Training Protocol: Enabled")
 
-def train_loader_safety(benchmark_mode, train_loader):
-    if not benchmark_mode:
-        if len(train_loader) < 3:
-            print("Not enough data present in the training set. Perhaps you didn't slice the audio files? ( Preprocessing step )")
-            os._exit(2333333)
+def train_loader_safety(train_loader):
+    if len(train_loader) < 3:
+        print("Not enough data present in the training set. Perhaps you didn't slice the audio files? ( Preprocessing step )")
+        os._exit(2333333)
 
 
 def verify_spk_dim(

@@ -7,7 +7,7 @@ def pretrained_selector(vocoder, sample_rate):
     path_g = os.path.join(base_path, f"f0G{str(sample_rate)[:2]}k.pth")
     path_d = os.path.join(base_path, f"f0D{str(sample_rate)[:2]}k.pth")
 
-    if os.path.exists(path_g) and os.path.exists(path_d):
-        return path_g, path_d
-    else:
-        return "", ""
+    return (
+        path_g if os.path.exists(path_g) else "",
+        path_d if os.path.exists(path_d) else "",
+    )

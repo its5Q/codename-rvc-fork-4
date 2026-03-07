@@ -231,38 +231,27 @@ def generator_loss_v2(disc_outputs, disc_real_outputs):
 class HingeAdversarialLoss(nn.Module):
     """Module for calculating adversarial loss in GANs."""
 
-    def __init__(self,) -> None:
+    def __init__(self, clamped_generator: bool = True) -> None:
         """
         Hinge adversarial loss.
+
+        Args:
+            clamped_generator (bool): If True, uses clamped generator loss max{0, 1 - D(fake)} If False, uses unclamped -D(fake).mean().
         """
         super().__init__()
 
-        self.adv_criterion = self._hinge_adv_loss
+        self.adv_criterion = self._hinge_adv_loss_clamped if clamped_generator else self._hinge_adv_loss_unclamped
         self.fake_criterion = self._hinge_fake_loss
         self.real_criterion = self._hinge_real_loss
 
     def forward(
         self, p_fakes: List[Tensor], p_reals: Optional[List[Tensor]] = None
     ) -> Union[Tensor, Tuple[Tensor, Tensor]]:
-        """
-        Calculate adversarial loss for both generator and discriminator.
-
-        Args:
-            p_fakes (List[Tensor]): List of discriminator outputs from the generated data.
-            p_reals (List[Tensor], optional): List of discriminator outputs from real data.
-                If not provided, only generator loss is computed (default: None).
-
-        Returns:
-            Tensor: Generator adversarial loss.
-            If p_reals is provided:
-                Tuple[Tensor, Tensor]: Fake and real discriminator loss values.
-        """
         # Generator adversarial loss
         if p_reals is None:
             adv_loss = 0.0
             for p_fake in p_fakes:
                 adv_loss += self.adv_criterion(p_fake)
-
             return adv_loss
 
         # Discriminator adversarial loss
@@ -271,12 +260,14 @@ class HingeAdversarialLoss(nn.Module):
             for p_fake, p_real in zip(p_fakes, p_reals):
                 fake_loss += self.fake_criterion(p_fake)
                 real_loss += self.real_criterion(p_real)
-
             return fake_loss, real_loss
 
+    def _hinge_adv_loss_clamped(self, x: Tensor) -> Tensor:
+        """Clamped hinge loss for generator: max{0, 1 - D(fake)}. Wavehax-aligned."""
+        return -torch.mean(torch.min(x - 1, x.new_zeros(x.size())))
 
-    def _hinge_adv_loss(self, x: Tensor) -> Tensor:
-        """Calculate hinge loss for generator."""
+    def _hinge_adv_loss_unclamped(self, x: Tensor) -> Tensor:
+        """Unclamped hinge loss for generator: -D(fake).mean()."""
         return -x.mean()
 
     def _hinge_real_loss(self, x: Tensor) -> Tensor:

@@ -21,6 +21,7 @@ from core import (
 )
 from rvc.configs.config import get_gpu_info, get_number_of_gpus, max_vram_gpu, microarchitecture_capability_checker, check_if_fp16
 from rvc.lib.utils import format_title
+from tabs.train.descs import *
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -366,7 +367,7 @@ def train_tab():
                 )
                 vocoder = gr.Radio(
                     label="Vocoder",
-                    info="**Vocoder for audio synthesis:** \n \n **HiFi-GAN:** \n- **Arch overview:ㅤHiFi-GAN + Hn-NSF for f0 handling. ( RVC's og vocoder )** \n- **COMPATIBILITY:ㅤAll clients incl. Mainline RVC / W-okada etc.** \n\n**RefineGAN:** \n - **Arch overview:ㅤHiFi-Gan + Hn-NSF + ParallelResBlock + AdaIN** \n- **COMPATIBILITY:ㅤThis Fork or Applio ( As for rt-vc, vonovox beta supports it. )** \n\n**RingFormer:** \n- **Arch overview:ㅤA hybrid Conformer-Based Vocoder + Snake-Beta act. + RingAttention + Hn-NSF** \n- **COMPATIBILITY:ㅤThis Fork ( As for rt-vc, 'Vonovox' supports it. )**  \n\n**ALPEX-GAN:** \n- **Arch overview: HiFi-Gan + FGSS/Cyc-noise excitation + Snake & Silu acts** \n- **COMPATIBILITY:ㅤThis Fork ( No rt-vc clients support it atm. )** \n\n **NOTES:** \n **( RingFormer Requires min. RTX 30xx [ At least Ampere microarchitecture ] )** \n **( Each Vocoder and it's supported sample rates require appropriate pretrained models. )**",
+                    info=VOCODER_INFO,
                     choices=["HiFi-GAN"],
                     value="HiFi-GAN",
                     interactive=False,
@@ -418,60 +419,29 @@ def train_tab():
         refresh = gr.Button("Refresh")
 
         with gr.Accordion("Advanced Settings for the preprocessing step", open=True):
-            gr.Markdown(
-            """
-             
-             <br/>
-             
-            ### **SmartCutter / Truncated-Audio approach:**
-             
-            #### Requirements:
-            + Your dataset is a **" fused dataset "** type ( Means, you concatenated / joined up all smaller samples / chunks into 1 continuous audio file )
-            + You keep "SmartCutter" enabled ( My machine-learning solution to 'silence truncation'. ) <br/> ⚠ ( **or** you made sure your audio is silence-truncated. )
-             
-             <br/>
-             
-            ### **Otherwise you likely should go with:**
-             
-            + SmartCutter:  Set it to "Disabled"
-            + Audio cutting:  "Automatic"
-            <br/> ⚠ ( Yet I'd still recommend to go with approach the first approach. It provides ***much better and more consistent*** results.
-             
-             <br/>
-             
-            ` NOTES ` <br/>
-            0. Remember, a really good dataset makes 50% of the model creation workflow. If you use awful datasets, don't expect miracle results.
-             
-            1. If your set has major peak / consistency issues, I recommend reading up on " Peak taming compression ".
-             
-            2. Generally.. you shouldn't tweak these default settings unless you know you're doing it.
-             
-            3. The only exception ( sub-point 2 ) would be for " DC / high-pass filtering " and " Noise Reduction " ~ Read their description.
-             
-            4. If SmartCutter causes issues for your set ( cut words and so on. ), fallback to classical silence truncation. <br/> ( You can use Audacity for that. )
-            """
-            )
+            gr.Markdown(DATASET_TRUNCATION_INFO)
             with gr.Row():
                 dataset_format = gr.Radio(
                     label="Dataset Format",
-                    info="Controls which format will be used for storing sliced audio files. Use FLAC if you are running low on storage space, but be aware that it introduces miniscule quantization noise (which shouldn't affect the model in any noticeable way, but not recommended if you want to process the sliced audio files later).",
+                    info=DATASET_FORMAT_INFO,
                     choices=["WAV", "FLAC"],
                     value="WAV",
                     interactive=True,
+                    scale=1.05,
                     key='dataset_format'
                 )
                 loading_resampling = gr.Radio(
                     label="Resampling & Loading Handler",
-                    info="- **librosa** - Uses SoX resampler \n ( SoXr set to VHQ by default. ).\n- **ffmpeg** -  Uses SW resampler \n ( Windowed Sinc filter with Blackman-Nuttall window ) \n\n **Both are viable choices!** \n **( But I'd actually go with Sinc / FFmpeg. )**",
+                    info=RESAMPLER_INFO,
                     choices=["librosa", "ffmpeg"],
                     value="librosa",
                     interactive=True,
-                    #scale=1.45,
+                    scale=0.7,
                     key='loading_resampling'
                 )
                 use_smart_cutter = gr.Checkbox(
                     label="SmartCutter",
-                    info="**Machine-Learning solution to silence truncation** \n Created especially with this fork in mind. \n - Automatically truncates the silences ( Ensuring min. 100ms spacings ) \n - Doesn't damage word-tails or inter-phonetic gaps ( unlike gating ) \n - Truncated areas are automatically replaced by pure silence \n ( in case of noise-contamination between words or sentences. ) \n - Tries to heavily respect breathing. \n ⚠ **Due to technical limitations, multi-spk processing will be slower.**",
+                    info=SMARTCUTTER_INFO,
                     value=True,
                     interactive=True,
                     visible=True,
@@ -479,17 +449,18 @@ def train_tab():
                 )
                 normalization_mode = gr.Radio(
                     label="Loudness Normalization",
-                    info="- **none:** Disabled \n ( Select this if the files are already normalized. ) \n- **post_peak:** Peak Post-Normalization \n ( Peak [ * 0.95] norm of each sliced segment. )",
+                    info=NORMALIZATION_INFO,
                     choices=["none", "post_peak"],
                     value="post_peak",
                     interactive=True,
                     visible=True,
+                    scale=0.6,
                     key='normalization_mode'
                 )
             with gr.Row():
                 cut_preprocess = gr.Radio(
                     label="Audio cutting",
-                    info="Audio file slicing-method selection:\n - **Skip** - if the files are already pre-sliced and properly normalized. \n- **Simple** - If your dataset is already silence-truncated. \n- **Automatic** - for automatic silence detection and slicing around it. \n\n **It is advised to go with 'SmartCutter' approach.** \n **( PS. Automatic is pretty crap. I advise against it unless your set's clean and you can't bother truncating it. )**",
+                    info=AUDIO_FILE_SLICING_INFO,
                     choices=["Skip", "Simple", "Automatic"],
                     value="Simple",
                     interactive=True,
@@ -581,7 +552,7 @@ def train_tab():
         with gr.Row():
             f0_method = gr.Radio(
                 label="Pitch extraction algorithm",
-                info="Pitch extraction algorithm to use for the audio conversion: \n\n**RMVPE:** The default algorithm, recommended for most cases. \n- The fastest, very robust to noise. Can tolerate harmonies / layered vocals to some degree.  \n\n**CREPE:** Better suited for truly clean audio. \n- Is slower and way worse in handling noise. Can provide different / softer-ish results. \n\n**CREPE-TINY:** Smaller / lighter variant of CREPE. \n- Performs worse than 'full' ( standard crepe ) but is way lighter on hardware.",
+                info=PITCH_EXTRACTION_INFO,
                 choices=["crepe", "crepe-tiny", "rmvpe", "fcpe"],
                 value="rmvpe",
                 interactive=True,
@@ -666,7 +637,7 @@ def train_tab():
                 max_vram_gpu(0),
                 step=1,
                 label="Batch Size",
-                info="[ TOO BIG BATCH SIZE CAN LEAD TO VRAM 'OOM' ISSUES. ]\n\n Bigger batch size: \n- Promotes smoother, more stable gradients. \n- Can beneficial in cases where your dataset is big and diverse. \n- Can lead to early overtraining or flat / ' stuck ' graphs. \n- Generalization might be worsened. \n- **Favors slower learning rate.** \n\n Smaller batch size: \n- Promotes noisier, less stable gradients. \n- More suitable when your dataset is small, less diverse or repetitive. \n- Can lead to instability / divergence or noisy as hell graphs. \n- Generalization might be improved. \n- **Favors faster learning rate.**",
+                info=BATCH_SIZE_INFO,
                 interactive=True,
                 key='batch_size'
             )
@@ -695,7 +666,7 @@ def train_tab():
                 with gr.Column(scale=0.9):
                     save_only_latest_net_models = gr.Checkbox(
                         label="Save Only Latest G/D",
-                        info="Don't disable it unless you need each 'G' and 'D' model saved every epoch. \n( It has it's use for pretrains creation, but not for finetuning. )",
+                        info="Don't disable it unless you need each 'G' and 'D' model saved every epoch. \n( It has its use for pretrains creation, but not for finetuning. )",
                         value=True,
                         interactive=True,
                         key='save_only_latest_net_models'
@@ -727,13 +698,6 @@ def train_tab():
                         value=auto_enable_checkpointing,
                         interactive=True,
                         key='use_checkpointing'
-                    )
-                    use_validation = gr.Checkbox(
-                        label="Enable hold-out validation",
-                        info="**Requires carefully handled dataset!**",
-                        value=False,
-                        interactive=True,
-                        key='use_validation'
                     )
                     use_tf32 = gr.Checkbox(
                         label="use 'TF32' precision",
@@ -818,7 +782,7 @@ def train_tab():
                 with gr.Column(scale=0.9):
                     spectral_loss = gr.Radio(
                         label="Spectral loss",
-                        info="- **L1 Mel Loss:** Standard L1 mel spectrogram loss - **Safe default.** \n- **Multi-Scale Mel Loss:** Mel spectrogram loss that utilizes multiple-scales - **Results vary.** \n- **Multi-Res STFT Loss:** STFT Spec. based loss that utilizes multiple-resolutions - **EXPERIMENTAL.** ",
+                        info=SPECTRAL_LOSS_INFO,
                         choices=["L1 Mel Loss", "Multi-Scale Mel Loss", "Multi-Res STFT Loss"],
                         value="L1 Mel Loss",
                         interactive=True,
@@ -826,7 +790,7 @@ def train_tab():
                     )
                     lr_scheduler = gr.Radio(
                         label="Learning rate scheduler",
-                        info="- **exp decay:** Decays the lr exponentially - **Safe default.** \n **( 'step' variant decays per step, 'epoch' per epoch. For finetuning per-step is recommended. )** \n- **cosine annealing:** Cosine annealing schedule - **Optional alternative.** \n- **none:** No scheduler - **For debugging or developing.**",
+                        info=LR_SCHEDULER_INFO,
                         choices=["exp decay step", "exp decay epoch", "cosine annealing", "none"],
                         value="exp decay epoch",
                         interactive=True,
@@ -843,7 +807,7 @@ def train_tab():
                     )
                     use_kl_annealing = gr.Checkbox(
                         label="KL loss annealing",
-                        info="Enables cyclic KL loss annealing for training. \n **Might potentially** mitigate overfitting on smaller datasets and generally should help with convergence. \n **(EXPERIMENTAL)**",
+                        info=KL_ANNEALING_INFO,
                         value=False,
                         interactive=True,
                         key='use_kl_annealing'
@@ -854,14 +818,14 @@ def train_tab():
                         3,
                         step=1,
                         label="KL annealing cycle duration",
-                        info="Determines the duration of each repeating annealing cycle. \n Limited testing showed 3 epochs is the most optimal, **but you can experiment for yourself**. \n **( Duration in epochs )**",
+                        info=KL_ANNEALING_CYCLE_INFO,
                         interactive=True,
                         visible=False,
                         key='kl_annealing_cycle_duration'
                     )
                     use_tstp = gr.Checkbox(
                         label="Two-Stage Training Protocol",
-                        info="Enables 'TSTP' ( Might be potentially useful for small datasets. ) \n Once encoders loss ( kl ) reaches '0.1': \n - Freezes: Encoders, Flow, Spk emb \n - Speeds up lr decay by 50% ( Exponential lr decay only. ) \n **(EXPERIMENTAL)**",
+                        info=TSTP_INFO,
                         value=False,
                         interactive=True,
                         key='use_tstp'
@@ -1030,7 +994,6 @@ def train_tab():
                     spectral_loss,
                     lr_scheduler,
                     exp_decay_gamma,
-                    use_validation,
                     use_kl_annealing,
                     kl_annealing_cycle_duration,
                     vits2_mode,
@@ -1243,7 +1206,7 @@ def train_tab():
 
             def update_noise_reduce_slider_visibility(noise_reduction):
                 return gr.update(visible=noise_reduction)
-            
+
             saved_components.extend([
                 # Model settings
                 architecture, optimizer, adversarial_loss, vocoder, sampling_rate, cpu_threads, extract_gpu,
@@ -1262,7 +1225,7 @@ def train_tab():
                 save_only_latest_net_models, save_weight_models, pretrained,
                 cleanup, use_checkpointing,
                 use_tf32, use_benchmark, use_deterministic, spectral_loss,
-                lr_scheduler, exp_decay_gamma, use_validation,
+                lr_scheduler, exp_decay_gamma,
                 custom_pretrained, g_pretrained_path,
                 d_pretrained_path, multiple_gpu, training_gpu, use_warmup,
                 warmup_duration, use_custom_lr, custom_lr_g,

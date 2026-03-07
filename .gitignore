@@ -15,7 +15,6 @@
 # Files to be ignored  ==========================
 env/
 utmos/
-rollback_cache/
 ffprobe.exe
 ffmpeg.exe
 assets/audios/
@@ -33,23 +32,9 @@ rvc/models/embedders/spin_v1/config.json
 rvc/models/embedders/spin_v2/config.json
 rvc/models/embedders/contentvec/config.json
 rvc/models/smartcutter/
-rvc/infer/pipeline - debug_ver.py
-rvc/lib/utils - debug.py
 rvc/lib/algorithm/generators/Vocoder_Experiments
-rvc/train/preprocess/preprocess - backup.py
 rvc/train/preprocess/preprocess_old - backup.py
-debug/
 DEV/
 *.pyc
-rvc/train/utils - Copy.py
 EXTRAS/transfer.py
-rvc/configs/config - backup.py
-rvc/train/preprocess/preprocess - LUFS WITHOUT SAFETY.py
 EXTRAS/uvmp_extractor.py
-rvc/train/train_debug.py
-rvc/train/train - Copy fail bench.py
-rvc/train/train_optuna.py
-rvc/lib/algorithm/generators/hifigan_prior.py
-DRC.txt
-rvc/train/train - Backup pre logging n misc refactor.py
-tabs/inference/inference - old.py

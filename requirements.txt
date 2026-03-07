@@ -1,14 +1,15 @@
 # Core dependencies
-numpy==1.26.4
-requests>=2.31.0,<2.32.0
+numpy==2.2.6
+requests==2.31.0
 wget
+tqdm
 
 # Audio processing
 ffmpeg-python>=0.2.0
-faiss-cpu==1.7.3
+faiss-cpu==1.13.2
 librosa==0.11.0
-scipy==1.11.1
-soundfile==0.13.1
+scipy==1.15
+soundfile==0.12.1
 sox==1.5.0
 soxr==0.5.0
 noisereduce
@@ -18,35 +19,33 @@ flatten-dict==0.4.2
 torch-dct==0.1.6
 auraloss==0.4.0
 pyloudnorm==0.1.1
-pesq==0.0.4; sys_platform == "linux"
-pesq @ https://github.com/codename0og/codename-essentials/raw/refs/heads/main/pesq-0.0.5-cp310-cp310-win_amd64.whl; sys_platform == "win32"
 
 # Machine learning and deep learning
-numba==0.61.0
+numba==0.64.0
 torch==2.7.1
 torchaudio==2.7.1
 torchvision==0.22.1
 torchcrepe==0.0.23
 torch-optimizer
-einop
+einops
 transformers==4.44.2
 nnaudio==0.3.3
 ring-attention-pytorch @ https://github.com/codename0og/codename-essentials/raw/refs/heads/main/ring_attention_pytorch-0.5.17-py3-none-any.whl
 triton==3.3.1; sys_platform == "linux"
 triton-windows==3.3.1.post21; sys_platform == "win32"
 peft==0.17.1
+
 # Visualization and UI
-matplotlib==3.7.2
+matplotlib==3.10.8
 tensorboard
 gradio==6.9.0
 local_attention==1.11.2
 
 # Miscellaneous utilities
 tensorboardX
-edge-tts==7.2.0
+edge-tts==7.2.7
 pypresence
 beautifulsoup4
 flask
 psutil==7.0.0
 zstandard
-tqdm

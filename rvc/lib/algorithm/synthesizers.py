@@ -37,7 +37,9 @@ class Synthesizer(torch.nn.Module):
         text_enc_hidden_dim: int = 768,
         vocoder: str = "HiFi-GAN",
         checkpointing: bool = False,
+        # Other
         vits2_mode: bool = False,
+        # RingFormer
         gen_istft_n_fft: int = 120,
         gen_istft_hop_size: int = 30,
         **kwargs,

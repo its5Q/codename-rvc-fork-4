@@ -29,7 +29,6 @@ import matplotlib.cm as cm
 
 import psutil
 from tqdm import tqdm
-from pesq import pesq
 
 import torch
 import torch.nn as nn
@@ -115,20 +114,19 @@ use_deterministic = bool(strtobool(sys.argv[21]))
 spectral_loss = sys.argv[22]
 lr_scheduler = sys.argv[23]
 exp_decay_gamma = float(sys.argv[24])
-use_validation = strtobool(sys.argv[25])
-use_kl_annealing = strtobool(sys.argv[26])
-kl_annealing_cycle_duration = int(sys.argv[27])
-vits2_mode = strtobool(sys.argv[28])
-rolling_loss_steps = int(sys.argv[29])
-use_tstp = bool(strtobool(sys.argv[30]))
+use_kl_annealing = strtobool(sys.argv[25])
+kl_annealing_cycle_duration = int(sys.argv[26])
+vits2_mode = strtobool(sys.argv[27])
+rolling_loss_steps = int(sys.argv[28])
+use_tstp = bool(strtobool(sys.argv[29]))
 
-grad_clip_scheduling = bool(strtobool(sys.argv[31]))
-grad_clip_steps_duration = int(sys.argv[32])
-grad_clip_value_g_cap, grad_clip_value_d_cap = (int(sys.argv[33]), int(sys.argv[34]))
-grad_clip_value_g_release, grad_clip_value_d_release = (int(sys.argv[35]), int(sys.argv[36]))
+grad_clip_scheduling = bool(strtobool(sys.argv[30]))
+grad_clip_steps_duration = int(sys.argv[31])
+grad_clip_value_g_cap, grad_clip_value_d_cap = (int(sys.argv[32]), int(sys.argv[33]))
+grad_clip_value_g_release, grad_clip_value_d_release = (int(sys.argv[34]), int(sys.argv[35]))
 
-use_custom_lr = strtobool(sys.argv[37])
-custom_lr_g, custom_lr_d = (float(sys.argv[38]), float(sys.argv[39])) if use_custom_lr else (None, None)
+use_custom_lr = strtobool(sys.argv[36])
+custom_lr_g, custom_lr_d = (float(sys.argv[37]), float(sys.argv[38])) if use_custom_lr else (None, None)
 assert not use_custom_lr or (custom_lr_g and custom_lr_d), "Invalid custom LR values."
 
 # Parse command line arguments end region ===========================
@@ -162,7 +160,6 @@ from_scratch = False
 use_lr_scheduler = lr_scheduler != "none"
 
 # Globals ( tweakable~ )
-benchmark_mode = False
 enable_persistent_workers = True
 
 c_stft = 21.0 # Seems close enough to multi-scale mel loss's magnitude, but needs more testing.
@@ -171,6 +168,7 @@ pretrain_preview = True
 pretrain_preview_interval = 100 # Measured in steps.
 
 override_pretrain_lr = False
+force_from_scratch = False
 new_pretrain_lr = 5e-5 # If you changed it, it needs to be re-adjusted to the most recent lr ~ anytime you resume!
 
 clip_grad_norm_override = False
@@ -269,26 +267,14 @@ def setup_env_and_distr(rank, n_gpus, device, device_id, config):
     if torch.cuda.is_available():
         torch.cuda.set_device(device_id)
 
-def prepare_dataloaders(config, n_gpus, rank, batch_size, use_validation, benchmark_mode):
+def prepare_dataloaders(config, n_gpus, rank, batch_size):
     from data_utils import (
         DistributedBucketSampler,
         TextAudioCollateMultiNSFsid,
         TextAudioLoaderMultiNSFsid
     )
 
-    if not benchmark_mode and use_validation:
-        full_dataset = TextAudioLoaderMultiNSFsid(config.data)
-        train_len = int(0.90 * len(full_dataset))
-        val_len = len(full_dataset) - train_len
-        train_dataset, val_dataset = torch.utils.data.random_split(
-            full_dataset, [train_len, val_len], generator=torch.Generator().manual_seed(config.train.seed)
-        )
-        train_dataset.lengths = [full_dataset.lengths[i] for i in train_dataset.indices]
-        val_dataset.lengths = [full_dataset.lengths[i] for i in val_dataset.indices]
-    else:
-        train_dataset = TextAudioLoaderMultiNSFsid(config.data)
-        val_dataset = None
-
+    train_dataset = TextAudioLoaderMultiNSFsid(config.data)
     train_sampler = DistributedBucketSampler(
         train_dataset,
         batch_size * n_gpus,
@@ -309,24 +295,9 @@ def prepare_dataloaders(config, n_gpus, rank, batch_size, use_validation, benchm
         persistent_workers=enable_persistent_workers,
         prefetch_factor=8
     )
-    val_loader = None
-    if val_dataset:
-        val_sampler = DistributedBucketSampler(
-            val_dataset,
-            batch_size * n_gpus,
-            [50, 100, 200, 300, 400, 500, 600, 700, 800, 900],
-            num_replicas=n_gpus,
-            rank=rank,
-            shuffle=False
-        )
-        val_loader = DataLoader(
-            val_dataset, batch_sampler=val_sampler, shuffle=False, collate_fn=collate_fn,
-            num_workers=1, pin_memory=True
-        )
-    
-    train_loader_safety(benchmark_mode, train_loader)
+    train_loader_safety(train_loader)
 
-    return train_loader, val_loader
+    return train_loader
 
 def get_g_model(config, sample_rate, vocoder, use_checkpointing):
     from rvc.lib.algorithm.synthesizers import Synthesizer
@@ -806,7 +777,6 @@ def run(
         use_warmup,
         config,
         optimizer_choice,
-        use_validation,
         lr_scheduler,
         exp_decay_gamma,
         use_kl_annealing,
@@ -827,13 +797,11 @@ def run(
     )
 
     # Dataloading and loaders preparation
-    train_loader, val_loader = prepare_dataloaders(
+    train_loader = prepare_dataloaders(
         config,
         n_gpus,
         rank,
-        batch_size,
-        use_validation,
-        benchmark_mode
+        batch_size
     )
 
     # Spk dim verif
@@ -905,7 +873,7 @@ def run(
             print(f"[INIT] TensorBoard writer initialized.")
 
     # from-scratch checker ( disables average loss )
-    if pretrainG in ["", "None"] and pretrainD in ["", "None"]:
+    if (pretrainG in ["", "None"] and pretrainD in ["", "None"]) or force_from_scratch:
         from_scratch = True
         if rank == 0:
             print("[INIT] No pretrains used: Average loss disabled!")
@@ -951,7 +919,6 @@ def run(
             [optim_g, optim_d],
             [scheduler_g, scheduler_d],
             train_loader,
-            val_loader if use_validation else None,
             [writer_eval],
             cache,
             total_epoch_count,
@@ -1002,7 +969,6 @@ def training_loop(
     optims,
     schedulers,
     train_loader,
-    val_loader,
     writers,
     cache,
     total_epoch_count,
@@ -1030,7 +996,6 @@ def training_loop(
         nets (list): List of models [net_g, net_d].
         optims (list): List of optimizers [optim_g, net_d].
         train_loader: training dataloader.
-        val_loader: validation dataloader.
         writers (list): List of TensorBoard writers [writer_eval].
         cache (list): List to cache data in GPU memory.
         total_epoch_count (int): The total number of epochs for training.
@@ -1050,8 +1015,6 @@ def training_loop(
     scheduler_g, scheduler_d = schedulers if schedulers is not None else (None, None)
 
     train_loader = train_loader if train_loader is not None else None
-    if not benchmark_mode and use_validation:
-        val_loader = val_loader if val_loader is not None else None
 
     if writers is not None:
         writer = writers[0]
@@ -1475,17 +1438,6 @@ def training_loop(
                 if traj_img is not None:
                     writer.add_image("Training/Weight_Trajectory", traj_img, global_step, dataformats='HWC')
 
-            if not benchmark_mode:
-                if use_validation:
-                # Run validation
-                    validation_loop(
-                        net_g.module if hasattr(net_g, "module") else net_g,
-                        val_loader,
-                        device,
-                        config,
-                        writer,
-                        global_step,
-                    )
             # Inferencing on reference sample
             o = eval_infer(net_g, reference)
             audio_dict = {f"gen/audio_{epoch}e_{global_step}s": o[0, :, :]} # Eval-infer samples
@@ -1575,93 +1527,6 @@ def training_loop(
 
         with torch.no_grad():
             torch.cuda.empty_cache()
-
-def validation_loop(net_g, val_loader, device, config, writer, global_step):
-    net_g.eval()
-    torch.cuda.empty_cache()
-
-    total_mel_error = 0.0
-    total_mrstft_loss = 0.0
-    total_pesq = 0.0
-    valid_pesq_count = 0
-    total_si_sdr = 0.0
-    count = 0
-
-    mrstft = auraloss.freq.MultiResolutionSTFTLoss(device=device)
-    resample_to_16k = torchaudio.transforms.Resample(orig_freq=config.data.sample_rate, new_freq=16000).to(device)
-
-    hop_length = config.data.hop_length
-    sample_rate = config.data.sample_rate
-
-    with torch.no_grad():
-        for batch in tqdm(val_loader, desc="Validating"):
-            phone, phone_lengths, pitch, pitchf, spec, spec_lengths, y, _, sid = [t.to(device) for t in batch]
-
-        # Infer
-            y_hat, x_mask, _ = net_g.infer(phone, phone_lengths, pitch, pitchf, sid)
-
-        # Get reference min-length ( according to gt wave's length )
-            y_len = y.shape[-1]
-
-        # Obtaining mel specs
-            y_hat_mel = wave_to_mel(config, y_hat, half=train_dtype) # generator-source mel
-            mel = wave_to_mel(config, y, half=train_dtype) # gt-source mel
-
-        # Mel loss:
-            y_hat_mel_len = y_hat_mel.shape[-1]
-            mel_len = mel.shape[-1]
-
-            min_t = min(y_hat_mel_len, mel_len)
-
-            mel_loss = F.l1_loss(y_hat_mel[..., :min_t], mel[..., :min_t])
-            total_mel_error += mel_loss.item()
-
-        # STFT loss:
-            y_hat_len = y_hat.shape[-1]
-
-            min_samples = min_t * hop_length
-            min_samples = min(min_samples, y_len, y_hat_len)
-
-            stft_loss = mrstft(y_hat[..., :min_samples], y[..., :min_samples])
-            total_mrstft_loss += stft_loss.item()
-
-        # si_sdr:
-            si_sdr_score = si_sdr(y_hat.squeeze(1), y.squeeze(1))
-            total_si_sdr += si_sdr_score.item()
-
-        # PESQ:
-            try:
-                y_16k_batch = resample_to_16k(y).cpu().numpy()          # (B, T)
-                y_hat_16k_batch = resample_to_16k(y_hat.squeeze(1)).cpu().numpy()  # (B, T)
-
-                for i in range(y_16k_batch.shape[0]):
-                    y_16k_f = np.squeeze(y_16k_batch[i]).astype(np.float32)
-                    y_hat_16k_f = np.squeeze(y_hat_16k_batch[i]).astype(np.float32)
-
-                    try:
-                        pesq_score = pesq(16000, y_16k_f, y_hat_16k_f, mode="wb")
-                        total_pesq += pesq_score
-                        valid_pesq_count += 1
-                    except Exception as e:
-                        print(f"[PESQ skipped] {e}")
-
-            except Exception as e:
-                print(f"[PESQ skipped outer] {e}")
-
-            count += 1
-
-    avg_mel = total_mel_error / count
-    avg_mrstft = total_mrstft_loss / count
-    avg_pesq = total_pesq / max(valid_pesq_count, 1)
-    avg_si_sdr = total_si_sdr / count
-
-    if writer is not None:
-        writer.add_scalar("validation/loss/mel_l1", avg_mel, global_step)
-        writer.add_scalar("validation/loss/mrstft", avg_mrstft, global_step)
-        writer.add_scalar("validation/score/pesq", avg_pesq, global_step)
-        writer.add_scalar("validation/score/si_sdr", avg_si_sdr, global_step)
-
-    net_g.train()
 
 if __name__ == "__main__":
     torch.multiprocessing.set_start_method("spawn")
